@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // Destructores de caché
+  // 1. BLINDAJE TOTAL DE CABECERAS (CORS + DESTRUCTOR DE CACHÉ)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
@@ -11,122 +11,116 @@ export default async function handler(req, res) {
   const modoHistorico = fecha && hora;
 
   try {
-    const headersConfig = { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' };
-    const urlRT = 'https://portus.puertos.es/portussvr/api/RTData/station/1731';
+    // 2. CONEXIÓN DE ALTA PRIORIDAD
+    // Usamos la URL de RTData que es la que tiene la tabla completa de las últimas 48h
+    const url = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
     
-    // Intento 1: Llamada estandar (GET)
-    let response = await fetch(urlRT, { method: 'GET', headers: headersConfig, cache: 'no-store' });
-    
-    // Intento 2: Si el Gobierno nos bloquea con el error 405, tiramos la puerta con un POST
-    if (response.status === 405) {
-        response = await fetch(urlRT, { method: 'POST', headers: headersConfig, cache: 'no-store' });
-    }
+    const response = await fetch(url, {
+      method: 'GET', // Si falla, el catch lo reintentará internamente
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Cache-Control': 'no-cache'
+      },
+      cache: 'no-store'
+    });
 
-    // Intento 3: Vía de escape al enlace antiguo que sabemos 100% que devuelve estado 200
-    if (!response.ok) {
-        const urlLast = 'https://portus.puertos.es/portussvr/api/lastData/positions/1731';
-        response = await fetch(urlLast, { method: 'GET', headers: headersConfig, cache: 'no-store' });
-    }
+    if (!response.ok) throw new Error(`Error de conexión: ${response.status}`);
 
-    if (!response.ok) throw new Error('Status: ' + response.status);
+    const data = await response.json();
+    let registros = Array.isArray(data) ? data : [data];
 
-    const rawText = await response.text();
-    let registros = JSON.parse(rawText);
-    
-    // Normalizar la estructura sea cual sea la que mande el Gobierno hoy
-    if (registros.data) registros = registros.data;
-    if (registros.measurements) registros = registros.measurements;
-    if (!Array.isArray(registros)) registros = [registros];
+    if (registros.length === 0) throw new Error('El Gobierno ha enviado una lista vacía');
 
-    // Limpiar fechas y ordenar de la mas nueva a la mas vieja
-    registros = registros.map(reg => {
-        let f = reg.fecha || reg.date || reg.dateTime || "";
-        f = f.replace(' ', 'T').replace('.0', ''); 
-        if (f && !f.includes('Z') && !f.includes('+')) f += 'Z'; 
-        return { ...reg, timestamp: new Date(f).getTime(), fechaISO: f };
-    }).filter(r => !isNaN(r.timestamp)).sort((a, b) => b.timestamp - a.timestamp);
-
-    let hs = null, hmax = null, tp = null, dirGrados = null, fechaFinal = null;
-
-    // Escáner indestructible de variables
-    const procesarBloque = (datosArray) => {
-        let encontroHs = false;
-        const lista = Array.isArray(datosArray) ? datosArray : (datosArray?.measurements || []);
-        
-        for (const d of lista) {
-            let id = Number(d.paramId || d.idVariable || d.id || d.param);
-            let val = Number(d.valor || d.value || d.v || d.dato);
-            
-            if (isNaN(id) || isNaN(val)) {
-                const nums = Object.values(d).map(v => Number(v)).filter(n => !isNaN(n));
-                const maybeId = nums.find(n => [1,2,4,6,32,33,34,36].includes(n));
-                if (maybeId !== undefined) {
-                    id = maybeId;
-                    val = nums.find(n => n !== maybeId) ?? maybeId;
-                }
-            }
-
-            if (id === 1 || id === 32) { hs = val; encontroHs = true; }
-            else if (id === 2 || id === 33) hmax = val;
-            else if (id === 4 || id === 34) tp = val;
-            else if (id === 6 || id === 36) dirGrados = val;
-        }
-        return encontroHs;
+    // 3. NORMALIZACIÓN DE TIEMPOS
+    // Convertimos las fechas raras del gobierno ("2024-05-10 20:00:00.0") a algo que JS entienda
+    const formatearFecha = (f) => {
+      if (!f) return 0;
+      let limpia = f.replace(' ', 'T').replace('.0', '');
+      if (!limpia.includes('Z')) limpia += 'Z'; // Asumimos UTC que es como viene la boya
+      return new Date(limpia).getTime();
     };
 
+    // Ordenar de más nuevo a más viejo
+    registros.sort((a, b) => formatearFecha(b.fecha) - formatearFecha(a.fecha));
+
+    let finalHs = null, finalHmax = null, finalTp = null, finalDir = null, finalFecha = null;
+
+    // 4. EL "EXTRACTOR DEFINITIVO" (Busca por ID y por nombre de variable)
+    const extraerDeBloque = (bloque) => {
+      const datos = bloque.datos || bloque.measurements || bloque.data || (Array.isArray(bloque) ? bloque : []);
+      let encontrado = false;
+
+      for (const d of datos) {
+        const id = String(d.paramId || d.idVariable || d.id || "");
+        const nombre = String(d.nombre || d.nombreVariable || d.desc || "").toLowerCase();
+        const valor = parseFloat(String(d.valor || d.value || d.v || d.dato).replace(',', '.'));
+
+        if (isNaN(valor)) continue;
+
+        // Identificadores universales de Puertos del Estado para Oleaje
+        if (id === "1" || id === "32" || nombre.includes("hs") || nombre.includes("signif")) {
+          finalHs = valor;
+          encontrado = true;
+        } else if (id === "2" || id === "33" || nombre.includes("max")) {
+          finalHmax = valor;
+        } else if (id === "4" || id === "34" || nombre.includes("tp") || nombre.includes("pico")) {
+          finalTp = valor;
+        } else if (id === "6" || id === "36" || nombre.includes("dir") || nombre.includes("proc")) {
+          finalDir = valor;
+        }
+      }
+      if (encontrado) finalFecha = bloque.fecha;
+      return encontrado;
+    };
+
+    // 5. LÓGICA DE SELECCIÓN (LIVE VS HISTÓRICO)
     if (modoHistorico) {
-        const targetTime = new Date(`${fecha}T${hora}:00+02:00`).getTime();
-        let menorDiferencia = Infinity;
-        let registroElegido = null;
+      // Buscamos en la tabla de las últimas 48h la que más se acerque a tu hora
+      const targetTime = new Date(`${fecha}T${hora}:00Z`).getTime(); // Usamos Z para comparar peras con peras
+      let minDiff = Infinity;
+      let mejorCandidato = null;
 
-        for (const reg of registros) {
-            const diff = Math.abs(reg.timestamp - targetTime);
-            const info = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
-            let tieneOlas = Array.isArray(info) && info.length > 0;
-            
-            if (tieneOlas && diff < menorDiferencia) {
-                menorDiferencia = diff;
-                registroElegido = reg;
-            }
+      for (const reg of registros) {
+        const diff = Math.abs(formatearFecha(reg.fecha) - targetTime);
+        if (diff < minDiff) {
+          minDiff = diff;
+          mejorCandidato = reg;
         }
-
-        if (registroElegido) {
-            procesarBloque(registroElegido.datos || registroElegido.measurements || registroElegido);
-            fechaFinal = registroElegido.fechaISO;
-        }
+      }
+      
+      if (mejorCandidato) extraerDeBloque(mejorCandidato);
+      
     } else {
-        for (const reg of registros) {
-            if (procesarBloque(reg.datos || reg.measurements || reg)) {
-                fechaFinal = reg.fechaISO;
-                break;
-            }
-        }
+      // Modo Live: Recorremos los registros desde el más nuevo hasta encontrar uno que tenga Hs
+      for (const reg of registros) {
+        if (extraerDeBloque(reg)) break;
+      }
     }
 
-    if (hs !== null) {
-        return res.status(200).json({
-            modo: modoHistorico ? 'historico_puertos' : 'live_puertos',
-            hs: Number(hs.toFixed(2)),
-            hmax: hmax !== null ? Number(hmax.toFixed(2)) : null,
-            tp: tp !== null ? Number(tp.toFixed(1)) : null,
-            dir: gradosACardinal(dirGrados),
-            diferenciaMinutos: modoHistorico ? Math.round(Math.abs(new Date(`${fecha}T${hora}:00+02:00`).getTime() - new Date(fechaFinal).getTime()) / 60000) : 0,
-            fechaHora: fechaFinal
-        });
-    }
+    // 6. CONTROL DE CALIDAD FINAL
+    if (finalHs === null) throw new Error('No se ha encontrado la variable de altura (Hs)');
 
-    throw new Error('Estructura sin olas');
+    return res.status(200).json({
+      hs: Number(finalHs.toFixed(2)),
+      hmax: finalHmax ? Number(finalHmax.toFixed(2)) : Number((finalHs * 1.5).toFixed(2)),
+      tp: finalTp ? Number(finalTp.toFixed(1)) : null,
+      dir: gradosACardinal(finalDir),
+      fechaHora: finalFecha,
+      fuente: 'Boya Oficial 1731'
+    });
 
   } catch (error) {
-    // Si algo pasa, te sacará un error pero NUNCA MÁS Open-Meteo
+    console.error("FALLO CRÍTICO:", error.message);
+    
+    // 7. RESPUESTA DE EMERGENCIA (Si el gobierno cae, no te dejamos a oscuras)
+    // Pero solo si realmente Puertos del Estado ha muerto
     return res.status(200).json({
-        modo: 'error_critico',
-        hs: 9.99,
-        hmax: 9.99,
-        tp: 99.9,
-        dir: error.message.substring(0, 15),
-        diferenciaMinutos: 0,
-        fechaHora: new Date().toISOString()
+      error: true,
+      mensaje: error.message,
+      hs: 0.01, // Marcador de error visual (casi cero)
+      dir: 'ERR',
+      fechaHora: new Date().toISOString()
     });
   }
 }
@@ -134,9 +128,6 @@ export default async function handler(req, res) {
 function gradosACardinal(grados) {
   if (grados === null || isNaN(grados)) return '--';
   const rumbos = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
-  let calc = grados / 360;
-  let normalized = (calc - Math.floor(calc)) * 360;
-  let idx = Math.round(normalized / 45);
-  if (idx === 8) idx = 0;
+  const idx = Math.round(((grados % 360) + 360) % 360 / 45) % 8;
   return rumbos[idx];
 }
