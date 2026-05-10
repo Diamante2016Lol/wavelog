@@ -1,8 +1,9 @@
 export default async function handler(req, res) {
-  // DESTRUCTOR DE CACHÉ: Obliga a Vercel y al navegador a pedir datos nuevos siempre
+  // 1. DESTRUCTORES DE CACHÉ Y CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -10,76 +11,102 @@ export default async function handler(req, res) {
   const modoHistorico = fecha && hora;
 
   try {
+    // 2. CONEXIÓN CAMUFLADA COMO NAVEGADOR
     const response = await fetch('https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es', {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-        cache: 'no-store' // Evita que la petición interna se quede pillada
+        headers: { 
+            'Accept': 'application/json', 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Referer': 'https://portus.puertos.es/',
+            'Origin': 'https://portus.puertos.es'
+        },
+        cache: 'no-store'
     });
 
-    if (!response.ok) throw new Error('Bloqueado por Puertos del Estado');
+    if (!response.ok) throw new Error('Status: ' + response.status);
 
-    const rawData = await response.json();
-    let registros = Array.isArray(rawData) ? rawData : [];
+    const rawText = await response.text();
+    let registros = JSON.parse(rawText);
+    if (!Array.isArray(registros)) registros = [registros];
 
-    // Ordenamos estrictamente de más reciente a más antiguo
-    registros.sort((a, b) => {
-        const ta = new Date(a.fecha ? a.fecha.replace(' ', 'T').replace('.0', '') + 'Z' : 0).getTime();
-        const tb = new Date(b.fecha ? b.fecha.replace(' ', 'T').replace('.0', '') + 'Z' : 0).getTime();
-        return tb - ta;
-    });
+    // 3. PREPARACIÓN DE FECHAS (Transformando de GMT a Absoluto Z)
+    registros = registros.map(reg => {
+        let f = reg.fecha || "";
+        f = f.replace(' ', 'T').replace('.0', '') + 'Z'; 
+        return { ...reg, timestamp: new Date(f).getTime(), fechaISO: f };
+    }).filter(r => !isNaN(r.timestamp)).sort((a, b) => b.timestamp - a.timestamp);
 
     let hs = null, hmax = null, tp = null, dirGrados = null, fechaFinal = null;
 
-    const procesarBloque = (datos) => {
-        let hayOlas = false;
-        if (Array.isArray(datos)) {
-            for (const d of datos) {
-                const id = Number(d.paramId);
-                const val = Number(d.valor);
-                if (!isNaN(val)) {
-                    if (id === 1) { hs = val; hayOlas = true; }
-                    else if (id === 2) { hmax = val; }
-                    else if (id === 4) { tp = val; }
-                    else if (id === 6) { dirGrados = val; }
+    // 4. PARSER DE FUERZA BRUTA
+    const procesarBloque = (datosArray) => {
+        let encontroHs = false;
+        if (Array.isArray(datosArray)) {
+            for (const d of datosArray) {
+                let id = null, val = null;
+                
+                // Intento A: Leer por claves lógicas
+                for (const key in d) {
+                    const k = key.toLowerCase();
+                    const v = d[key];
+                    if (typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)))) {
+                        if (k === 'id' || k.includes('param') || k.includes('var') || k === 'codigo') {
+                            id = Number(v);
+                        } else if (k === 'valor' || k === 'value' || k === 'dato' || k === 'v' || k === 'medicion') {
+                            val = Number(v);
+                        }
+                    }
                 }
+
+                // Intento B: Fuerza bruta por array de números
+                if (id === null || val === null) {
+                    const nums = Object.values(d).map(v => Number(v)).filter(n => !isNaN(n));
+                    const maybeId = nums.find(n => [1,2,3,4,6].includes(n));
+                    if (maybeId !== undefined) {
+                        id = maybeId;
+                        val = nums.find(n => n !== maybeId) ?? maybeId;
+                    }
+                }
+
+                // Asignación de variables oficiales
+                if (id === 1) { hs = val; encontroHs = true; }
+                else if (id === 2) hmax = val;
+                else if (id === 4) tp = val;
+                else if (id === 6) dirGrados = val;
             }
         }
-        return hayOlas;
+        return encontroHs;
     };
 
+    // 5. ENRUTADOR: TIEMPO REAL VS HISTÓRICO
     if (modoHistorico) {
-        // Convertimos la hora de España al reloj absoluto
+        // Transformar la hora introducida en España (+02:00) a milisegundos absolutos
         const targetTime = new Date(`${fecha}T${hora}:00+02:00`).getTime();
         let menorDiferencia = Infinity;
-        let registroSeleccionado = null;
+        let registroElegido = null;
 
         for (const reg of registros) {
-            if (!reg.fecha) continue;
-            const t = new Date(reg.fecha.replace(' ', 'T').replace('.0', '') + 'Z').getTime();
-            const diff = Math.abs(t - targetTime);
-
-            const tieneOlas = Array.isArray(reg.datos) && reg.datos.some(d => Number(d.paramId) === 1);
-            if (tieneOlas && diff < menorDiferencia) {
+            const diff = Math.abs(reg.timestamp - targetTime);
+            if (diff < menorDiferencia && Array.isArray(reg.datos) && reg.datos.length > 0) {
                 menorDiferencia = diff;
-                registroSeleccionado = reg;
+                registroElegido = reg;
             }
         }
 
-        if (registroSeleccionado && menorDiferencia <= 86400000) { 
-            procesarBloque(registroSeleccionado.datos);
-            fechaFinal = registroSeleccionado.fecha;
-        } else {
-            throw new Error('Sin histórico reciente, pasa a Open-Meteo');
+        if (registroElegido) {
+            procesarBloque(registroElegido.datos);
+            fechaFinal = registroElegido.fechaISO;
         }
     } else {
-        // MODO LIVE: Busca la medición más fresca que tenga olas (respeta el retraso de la boya)
+        // Coger el bloque válido más reciente de la tabla
         for (const reg of registros) {
             if (procesarBloque(reg.datos)) {
-                fechaFinal = reg.fecha;
+                fechaFinal = reg.fechaISO;
                 break;
             }
         }
     }
 
+    // 6. RESPUESTA FINAL SI TODO HA IDO BIEN
     if (hs !== null) {
         return res.status(200).json({
             modo: modoHistorico ? 'historico_puertos' : 'live_puertos',
@@ -87,52 +114,25 @@ export default async function handler(req, res) {
             hmax: hmax !== null ? Number(hmax.toFixed(2)) : null,
             tp: tp !== null ? Number(tp.toFixed(1)) : null,
             dir: gradosACardinal(dirGrados),
+            diferenciaMinutos: modoHistorico ? Math.round(Math.abs(new Date(`${fecha}T${hora}:00+02:00`).getTime() - new Date(fechaFinal).getTime()) / 60000) : 0,
             fechaHora: fechaFinal
         });
     }
-    throw new Error('No se encontraron olas en Puertos');
+
+    throw new Error('Variables vacias en JSON');
 
   } catch (error) {
-      // PLAN DE RESCATE: Open-Meteo
-      const lat = 41.38, lon = 2.17;
-      let hsOM = null, hmaxOM = null, tpOM = null, dirOM = null, fechaOM = null;
-
-      if (modoHistorico) {
-          const resOM = await fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction&timezone=Europe/Madrid&start_date=${fecha}&end_date=${fecha}`);
-          const dataOM = await resOM.json();
-          
-          if (dataOM.hourly && dataOM.hourly.time.length > 0) {
-              const target = new Date(`${fecha}T${hora}:00+02:00`).getTime();
-              let minDiff = Infinity;
-              let idx = 0;
-              dataOM.hourly.time.forEach((tStr, i) => {
-                  const diff = Math.abs(new Date(tStr).getTime() - target);
-                  if (diff < minDiff) { minDiff = diff; idx = i; }
-              });
-              hsOM = dataOM.hourly.wave_height[idx];
-              tpOM = dataOM.hourly.wave_period[idx];
-              dirOM = dataOM.hourly.wave_direction[idx];
-              hmaxOM = hsOM ? hsOM * 1.5 : null;
-              fechaOM = dataOM.hourly.time[idx];
-          }
-      } else {
-          const resOM = await fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height,wave_period,wave_direction&timezone=Europe/Madrid`);
-          const dataOM = await resOM.json();
-          hsOM = dataOM.current.wave_height;
-          tpOM = dataOM.current.wave_period;
-          dirOM = dataOM.current.wave_direction;
-          hmaxOM = hsOM ? hsOM * 1.5 : null;
-          fechaOM = dataOM.current.time;
-      }
-
-      return res.status(200).json({
-          modo: 'openmeteo',
-          hs: hsOM ? Number(hsOM.toFixed(2)) : null,
-          hmax: hmaxOM ? Number(hmaxOM.toFixed(2)) : null,
-          tp: tpOM ? Number(tpOM.toFixed(1)) : null,
-          dir: dirOM !== null ? gradosACardinal(dirOM) : '--',
-          fechaHora: fechaOM
-      });
+    // 7. MODO DEPURACIÓN VISUAL
+    // Si algo falla, lo mostramos en el frontend con valores 9.99 para cazar el error instantáneamente.
+    return res.status(200).json({
+        modo: 'error_critico',
+        hs: 9.99,
+        hmax: 9.99,
+        tp: 99.9,
+        dir: error.message.substring(0, 15),
+        diferenciaMinutos: 0,
+        fechaHora: new Date().toISOString()
+    });
   }
 }
 
