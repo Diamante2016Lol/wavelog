@@ -1,67 +1,87 @@
 export default async function handler(req, res) {
-  // 1. Cabeceras para que el navegador no dé problemas
+  // Cabeceras de seguridad y control de cache
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { fecha, hora } = req.query;
   const modoHistorico = fecha && hora;
 
   try {
-    // 2. Llamada a la API oficial con el ID de Barcelona II (1731)
-    const response = await fetch('https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es', {
+    // Añadimos un timestamp unico a la URL para saltarnos cualquier cache
+    const timestamp = Date.now();
+    const url = `https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es&t=${timestamp}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Accept-Language': 'es-ES,es;q=0.9',
+        'Connection': 'keep-alive',
+        'Referer': 'https://portus.puertos.es/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       },
       cache: 'no-store'
     });
 
-    if (!response.ok) throw new Error('Fallo de red');
+    if (!response.ok) throw new Error('Error de conexion con el servidor oficial');
 
     const registros = await response.json();
-    if (!Array.isArray(registros) || registros.length === 0) throw new Error('Sin datos');
+    if (!Array.isArray(registros) || registros.length === 0) throw new Error('No hay datos disponibles');
 
-    // 3. Ordenar: El más reciente primero
-    registros.sort((a, b) => {
-      const ta = new Date(a.fecha.replace(' ', 'T')).getTime();
-      const tb = new Date(b.fecha.replace(' ', 'T')).getTime();
-      return tb - ta;
-    });
+    // Función para convertir la fecha del Gobierno a formato JS limpio
+    const parseDate = (f) => new Date(f.replace(' ', 'T').replace('.0', '') + 'Z').getTime();
 
-    let registroElegido = registros[0]; // Por defecto, el último dato (Widget)
+    // Ordenar de mas reciente a mas antiguo
+    registros.sort((a, b) => parseDate(b.fecha) - parseDate(a.fecha));
+
+    let bloqueElegido = registros[0];
 
     if (modoHistorico) {
-      const target = new Date(`${fecha}T${hora}:00`).getTime();
+      // Ajustamos la hora solicitada a horario UTC para comparar
+      const target = new Date(`${fecha}T${hora}:00Z`).getTime();
       let minDiff = Infinity;
-      for (const r of registros) {
-        const diff = Math.abs(new Date(r.fecha.replace(' ', 'T')).getTime() - target);
+      for (const reg of registros) {
+        const diff = Math.abs(parseDate(reg.fecha) - target);
         if (diff < minDiff) {
           minDiff = diff;
-          registroElegido = r;
+          bloqueElegido = reg;
         }
       }
     }
 
-    // 4. Mapeo directo de los datos (ID 1=Hs, 2=Hmax, 4=Tp, 6=Dir)
-    let dataMap = {};
-    registroElegido.datos.forEach(d => { dataMap[d.paramId] = d.valor; });
+    // Extraer variables por su ID oficial (1=Hs, 2=Hmax, 4=Tp, 6=Dir)
+    let hs = null, hmax = null, tp = null, dir = null;
+    
+    if (bloqueElegido && bloqueElegido.datos) {
+      bloqueElegido.datos.forEach(d => {
+        const id = parseInt(d.paramId);
+        const val = parseFloat(d.valor);
+        if (id === 1) hs = val;
+        if (id === 2) hmax = val;
+        if (id === 4) tp = val;
+        if (id === 6) dir = val;
+      });
+    }
 
-    const hs = parseFloat(dataMap[1]);
-    const hmax = dataMap[2] ? parseFloat(dataMap[2]) : (hs * 1.5);
-    const tp = parseFloat(dataMap[4]);
-    const dir = parseFloat(dataMap[6]);
+    if (hs === null) throw new Error('El registro no contiene datos de oleaje');
 
     return res.status(200).json({
-      hs: hs ? Number(hs.toFixed(2)) : null,
-      hmax: hmax ? Number(hmax.toFixed(2)) : null,
+      hs: Number(hs.toFixed(2)),
+      hmax: hmax ? Number(hmax.toFixed(2)) : Number((hs * 1.5).toFixed(2)),
       tp: tp ? Number(tp.toFixed(1)) : null,
       dir: gradosACardinal(dir),
-      fechaHora: registroElegido.fecha
+      fechaHora: bloqueElegido.fecha
     });
 
   } catch (error) {
-    // Si falla Puertos del Estado, devolvemos un error claro para el frontend
-    return res.status(200).json({ error: true, mensaje: error.message });
+    return res.status(500).json({ 
+      error: true, 
+      mensaje: error.message 
+    });
   }
 }
 
