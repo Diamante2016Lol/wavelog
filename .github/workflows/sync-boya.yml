@@ -34,3 +34,7 @@ jobs:
         env:
           SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Instalar dependencias
+        run: |
+          echo '{"name":"wavelog","version":"1.0.0","type":"module"}' > package.json
+          npm install @supabase/supabase-js ws
