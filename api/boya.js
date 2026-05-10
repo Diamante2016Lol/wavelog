@@ -13,111 +13,83 @@ export default async function handler(req, res) {
   let fuente = 'desconocida';
 
   try {
-    // 1. INTENTAR PUERTOS DEL ESTADO (RTData)
+    // 1. PUERTOS DEL ESTADO - Extracción Quirúrgica basada en la tabla oficial
     const urlPdE = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
-    const responsePdE = await fetch(urlPdE, { 
-        headers: { 
+    const responsePdE = await fetch(urlPdE, {
+        headers: {
             'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36'
         },
-        cache: 'no-store' // <- MAGIA 1: Evita que Vercel congele los datos antiguos
+        cache: 'no-store'
     });
-    
+
     if (responsePdE.ok) {
       const rawData = await responsePdE.json();
-      const listaRegistros = Array.isArray(rawData) ? rawData : [rawData];
-      
-      // Ordenamos de más reciente a más antiguo
-      listaRegistros.sort((a, b) => {
-        const timeA = new Date(a.fecha || a.date || a.dateTime || 0).getTime();
-        const timeB = new Date(b.fecha || b.date || b.dateTime || 0).getTime();
-        return timeB - timeA;
-      });
+      let registros = Array.isArray(rawData) ? rawData : [];
 
-      function extraerDatos(reg) {
-        let encontradoOlas = false;
-        const listaDatos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
-        
-        for (const item of listaDatos) {
-           let val = null;
-           let keywords = "";
+      // Convertir la fecha "2026-05-10 18:00:00.0" a formato absoluto UTC ("Z") 
+      // y ordenar de más reciente a más antiguo
+      registros = registros.map(reg => {
+         let f = reg.fecha || "";
+         f = f.replace(' ', 'T').replace('.0', '') + 'Z'; 
+         return { ...reg, timestamp: new Date(f).getTime(), fechaISO: f };
+      }).filter(r => !isNaN(r.timestamp)).sort((a, b) => b.timestamp - a.timestamp);
 
-           // MAGIA 2: Escáner bruto que ignora la estructura exacta del Gobierno
-           if (typeof item === 'object') {
-               for (let key in item) {
-                   const k = key.toLowerCase();
-                   const v = item[key];
-                   if (k.includes('valor') || k.includes('value') || k === 'v' || k === 'dato' || k === 'val') {
-                       val = v;
-                   } else {
-                       keywords += " " + String(v).toLowerCase() + " " + k + " ";
-                   }
-               }
-           }
-           
-           if (val !== null && val !== undefined) {
-               const num = parseFloat(String(val).replace(',', '.'));
-               
-               if (keywords.includes(' 1 ') || keywords.includes(' 32 ') || keywords.includes('sig') || keywords.includes('hs')) { hs = num; encontradoOlas = true; }
-               else if (keywords.includes(' 2 ') || keywords.includes(' 33 ') || keywords.includes('max') || keywords.includes('máx')) { hmax = num; }
-               else if (keywords.includes(' 4 ') || keywords.includes(' 34 ') || keywords.includes('pic') || keywords.includes('tp')) { tp = num; }
-               else if (keywords.includes(' 6 ') || keywords.includes(' 36 ') || keywords.includes('dir') || keywords.includes('proc')) { dirGrados = num; }
-           }
-        }
-
-        if (encontradoOlas) {
-           let f = reg.fecha || reg.date || reg.dateTime || "";
-           // MAGIA 3: Forzar conversión a zona horaria de España
-           if (f && !f.includes('Z') && !f.includes('+')) f = f.trim() + 'Z';
-           fechaHora = f;
-        }
-        return encontradoOlas;
-      }
+      // Lector estricto de identificadores (Hs=1, Hmax=2, Tp=4, Dir=6)
+      const leerDatos = (datosArray) => {
+          let encontro = false;
+          if (Array.isArray(datosArray)) {
+              for (const d of datosArray) {
+                  const id = Number(d.paramId);
+                  const val = Number(d.valor);
+                  if (!isNaN(val)) {
+                      if (id === 1) { hs = val; encontro = true; }
+                      if (id === 2) { hmax = val; }
+                      if (id === 4) { tp = val; }
+                      if (id === 6) { dirGrados = val; }
+                  }
+              }
+          }
+          return encontro;
+      };
 
       if (modoHistorico) {
-        const targetTimestamp = new Date(`${fecha}T${hora}:00Z`).getTime(); 
-        let minDiff = Infinity;
-        let registroElegido = null;
+         // Transformar la hora del formulario (España, asumiendo verano +02:00) a Timestamp para buscar exacto
+         const targetTimestamp = new Date(`${fecha}T${hora}:00+02:00`).getTime();
+         let minDiff = Infinity;
+         let mejorRegistro = null;
 
-        for (const reg of listaRegistros) {
-          let regTimeStr = reg.fecha || reg.date || reg.dateTime || "";
-          if (regTimeStr && !regTimeStr.includes('Z') && !regTimeStr.includes('+')) regTimeStr += 'Z';
-          const regTime = new Date(regTimeStr).getTime();
-          
-          const diff = Math.abs(regTime - targetTimestamp);
-          
-          if (diff < minDiff) {
-            let tieneOlas = false;
-            const datos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
-            for (const d of datos) {
-                let keys = JSON.stringify(d).toLowerCase();
-                if (keys.includes('sig') || keys.includes('hs') || keys.includes('"1"') || keys.includes(':1,') || keys.includes('paramid":1')) {
-                    tieneOlas = true;
-                }
-            }
-            if (tieneOlas) {
-                minDiff = diff;
-                registroElegido = reg;
-                diferenciaMinutos = Math.round(diff / 60000);
-            }
-          }
-        }
-        
-        if (registroElegido && diferenciaMinutos <= 1440) { 
-           extraerDatos(registroElegido);
-           fuente = 'historico_puertos';
-        }
+         for (const reg of registros) {
+             const diff = Math.abs(reg.timestamp - targetTimestamp);
+             // Verificar si este bloque horario tiene datos de Hs (paramId=1)
+             const tieneHs = Array.isArray(reg.datos) && reg.datos.some(d => Number(d.paramId) === 1);
+             
+             if (tieneHs && diff < minDiff) {
+                 minDiff = diff;
+                 mejorRegistro = reg;
+             }
+         }
+
+         if (mejorRegistro) {
+             leerDatos(mejorRegistro.datos);
+             fechaHora = mejorRegistro.fechaISO;
+             diferenciaMinutos = Math.round(minDiff / 60000);
+             fuente = 'historico_puertos';
+         }
       } else {
-        for (const reg of listaRegistros) {
-           if (extraerDatos(reg)) {
-               fuente = 'live_puertos';
-               break; 
-           }
-        }
+         // MODO LIVE: Busca el primer bloque disponible que tenga olas.
+         // Esto respeta el retraso natural de 1 o 2 horas de la boya real.
+         for (const reg of registros) {
+             if (leerDatos(reg.datos)) {
+                 fechaHora = reg.fechaISO;
+                 fuente = 'live_puertos';
+                 break;
+             }
+         }
       }
     }
   } catch (e) {
-    console.warn("Fallo en Puertos del Estado:", e.message);
+    console.warn("Fallo Puertos del Estado:", e.message);
   }
 
   // 2. RED DE SEGURIDAD OPEN-METEO
@@ -130,13 +102,12 @@ export default async function handler(req, res) {
             if (omRes.ok) {
                 const data = await omRes.json();
                 if (data.hourly && data.hourly.time && data.hourly.time.length > 0) {
-                    const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+                    const targetTimestamp = new Date(`${fecha}T${hora}:00+02:00`).getTime();
                     let bestIdx = 0, minDiff = Infinity;
                     data.hourly.time.forEach((timeStr, i) => {
                         const diff = Math.abs(new Date(timeStr).getTime() - targetTimestamp);
                         if (diff < minDiff) { minDiff = diff; bestIdx = i; }
                     });
-                    
                     hs = data.hourly.wave_height[bestIdx];
                     tp = data.hourly.wave_period[bestIdx];
                     dirGrados = data.hourly.wave_direction[bestIdx];
@@ -160,11 +131,10 @@ export default async function handler(req, res) {
             }
         }
     } catch (e) {
-        console.warn("Fallo en Open-Meteo:", e.message);
+        console.warn("Fallo Open-Meteo:", e.message);
     }
   }
 
-  // 3. RESPUESTA FINAL
   if (hs === null && tp === null) {
       return res.status(404).json({ error: 'No se encontraron datos.' });
   }
@@ -175,7 +145,7 @@ export default async function handler(req, res) {
     hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
     tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
     dir: gradosACardinal(dirGrados),
-    diferenciaMinutos: diferenciaMinutos,
+    diferenciaMinutos: Math.abs(diferenciaMinutos),
     fechaHora: fechaHora || new Date().toISOString()
   });
 }
