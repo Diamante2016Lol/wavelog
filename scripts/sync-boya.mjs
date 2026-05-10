@@ -3,6 +3,7 @@
 // Node.js 20+ con ES Modules
 
 import { createClient } from '@supabase/supabase-js';
+import ws from 'ws';
 
 // =============================================================================
 //  CONFIGURACIÓN
@@ -40,7 +41,9 @@ async function main() {
     process.exit(1);
   }
 
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    realtime: { transport: ws }
+  });
 
   // PASO 1: Obtener datos
   let registros;
