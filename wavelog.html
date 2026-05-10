@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>🌊 WaveLog — Diario de Surf Colaborativo</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { syne: ['Syne', 'sans-serif'], dm: ['DM Sans', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'], } } }
+    }
+  </script>
+
+  <style>
+    :root {
+      --bg: #030e1b; --surface: #071828; --card: rgba(6, 24, 46, 0.88); --card-border: rgba(20, 184, 166, 0.22);
+      --teal: #14b8a6; --teal-light: #2dd4bf; --sky: #0ea5e9; --foam: #dff0ef;
+      --muted: #4a7a8a; --gold: #f59e0b; --red: #ef4444; --purple: #7c3aed;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--foam); min-height: 100vh; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+    
+    .ocean-bg { position: fixed; inset: 0; z-index: 0; background: radial-gradient(ellipse at 15% 40%, rgba(14,165,233,0.09) 0%, transparent 55%), radial-gradient(ellipse at 85% 15%, rgba(20,184,166,0.07) 0%, transparent 50%), radial-gradient(ellipse at 50% 90%, rgba(6, 25, 55, 0.5) 0%, transparent 65%), linear-gradient(170deg, #030e1b 0%, #05162a 50%, #030c18 100%); }
+    .ocean-bg::after { content: ''; position: absolute; inset: 0; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E"); opacity: 0.5; pointer-events: none; }
+    #app { position: relative; z-index: 1; max-width: 620px; margin: 0 auto; padding: 0 15px 90px; }
+
+    .app-header { padding: 22px 0 14px; text-align: center; }
+    .app-logo { font-family: 'Syne', sans-serif; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.03em; background: linear-gradient(135deg, #2dd4bf 0%, #0ea5e9 60%, #38bdf8 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; line-height: 1.1; }
+    .app-tagline { font-size: 0.67rem; color: var(--muted); letter-spacing: 0.2em; text-transform: uppercase; margin-top: 3px; }
+
+    .conditions-bar { background: var(--card); border: 1px solid var(--card-border); border-radius: 16px; padding: 13px 16px; margin-bottom: 18px; backdrop-filter: blur(14px); position: relative; overflow: hidden; }
+    .conditions-label { font-family: 'JetBrains Mono', monospace; font-size: 0.63rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--teal); margin-bottom: 9px; }
+    .conditions-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .condition-item { text-align: center; }
+    .condition-value { font-family: 'JetBrains Mono', monospace; font-size: 1.45rem; font-weight: 600; color: #fff; line-height: 1; }
+    .condition-unit { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+    .condition-label { font-size: 0.58rem; color: var(--muted); margin-top: 1px; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; animation: dotPulse 2.2s ease-in-out infinite; }
+    .status-dot.live { background: #22c55e; } .status-dot.mock { background: var(--gold); } .status-dot.loading{ background: var(--sky); }
+    @keyframes dotPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.75); } }
+
+    .tab-nav { display: flex; gap: 5px; background: rgba(6, 20, 42, 0.75); border: 1px solid var(--card-border); border-radius: 14px; padding: 5px; margin-bottom: 18px; backdrop-filter: blur(12px); }
+    .tab-btn { flex: 1; padding: 9px 6px; border-radius: 10px; border: 1px solid transparent; background: transparent; color: var(--muted); font-family: 'DM Sans', sans-serif; font-size: 0.72rem; font-weight: 500; cursor: pointer; transition: all 0.22s ease; display: flex; flex-direction: column; align-items: center; gap: 2px; -webkit-tap-highlight-color: transparent; }
+    .tab-btn.active { background: linear-gradient(135deg, rgba(20,184,166,0.18), rgba(14,165,233,0.13)); color: var(--teal-light); border-color: rgba(20,184,166,0.28); }
+    .panel { display: none; animation: fadeUp 0.28s ease; } .panel.active { display: block; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    .glass-card { background: var(--card); border: 1px solid var(--card-border); border-radius: 18px; padding: 18px 18px 20px; backdrop-filter: blur(16px); position: relative; margin-bottom: 14px; }
+    .section-title { font-family: 'Syne', sans-serif; font-size: 1.05rem; font-weight: 700; color: #fff; margin-bottom: 14px; display: flex; align-items: center; gap: 7px; }
+    .form-group { margin-bottom: 12px; }
+    .form-label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.63rem; color: var(--teal); letter-spacing: 0.13em; text-transform: uppercase; margin-bottom: 5px; }
+    .form-input { width: 100%; background: rgba(3, 12, 26, 0.75); border: 1px solid rgba(20,184,166,0.2); border-radius: 10px; padding: 9px 12px; color: var(--foam); font-size: 0.88rem; outline: none; }
+    .form-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .form-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .form-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+
+    .star-rating { display: flex; gap: 4px; }
+    .star-btn { font-size: 1.9rem; cursor: pointer; color: rgba(30, 60, 90, 0.8); border: none; background: none; padding: 1px 3px; -webkit-tap-highlight-color: transparent; }
+    .star-btn.active { color: var(--gold); filter: drop-shadow(0 0 7px rgba(245,158,11,0.55)); }
+
+    .btn-primary { width: 100%; padding: 13px; background: linear-gradient(135deg, #14b8a6 0%, #0ea5e9 100%); border: none; border-radius: 12px; color: #fff; font-family: 'Syne', sans-serif; font-weight: 700; cursor: pointer; margin-top: 4px; box-shadow: 0 4px 22px rgba(20,184,166,0.25); -webkit-tap-highlight-color: transparent; }
+    .btn-oracle { background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%); box-shadow: 0 4px 22px rgba(124,58,237,0.28); }
+    .btn-secondary { background: none; border: 1px solid rgba(14,165,233,0.3); border-radius: 8px; padding: 7px 13px; color: var(--sky); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; cursor: pointer; width: 100%; margin-bottom: 10px; -webkit-tap-highlight-color: transparent; }
+
+    .session-card { background: rgba(5, 18, 40, 0.65); border: 1px solid rgba(20,184,166,0.16); border-radius: 13px; padding: 13px 14px; margin-bottom: 11px; position: relative; }
+    .session-spot { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.98rem; color: #fff; }
+    .session-date { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: var(--muted); }
+    .condition-tag { background: rgba(20,184,166,0.1); border: 1px solid rgba(20,184,166,0.2); border-radius: 5px; padding: 2px 7px; font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: var(--teal); margin-right: 4px; display: inline-block; margin-top: 4px; }
+    .delete-btn { position: absolute; top: 11px; right: 10px; color: rgba(239,68,68,0.35); cursor: pointer; font-size: 0.82rem; padding: 4px; border: none; background: none; }
+
+    .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(80px); background: rgba(20,184,166,0.95); color: #fff; padding: 11px 22px; border-radius: 30px; font-size: 0.83rem; z-index: 9999; transition: transform 0.38s cubic-bezier(0.34,1.56,0.64,1); }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .stars-filled { color: var(--gold); } .stars-empty { color: rgba(30,60,90,0.9); }
+  </style>
+</head>
+
+<body>
+  <div class="ocean-bg"></div>
+  <div id="toast" class="toast"></div>
+
+  <div id="app">
+    <header class="app-header">
+      <div class="app-logo">🌊 WaveLog Cloud</div>
+      <div class="app-tagline">Diario de Surf Compartido</div>
+    </header>
+
+    <div class="conditions-bar">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span class="conditions-label">📡 Boya Barcelona (Open-Meteo)</span>
+        <button onclick="fetchPortusData()" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
+      </div>
+      <div id="conditions-content">
+        <div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando...</div>
+      </div>
+    </div>
+
+    <nav class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('log')" id="tab-log"><span>📝</span><span>Registrar</span></button>
+      <button class="tab-btn" onclick="switchTab('history')" id="tab-history"><span>🏄</span><span>Grupo</span></button>
+      <button class="tab-btn" onclick="switchTab('oracle')" id="tab-oracle"><span>🔮</span><span>Oráculo</span></button>
+    </nav>
+
+    <section id="panel-log" class="panel active">
+      <div class="glass-card">
+        <div class="section-title">📝 Nuevo Baño</div>
+        <div class="form-grid-2">
+          <div class="form-group"><label class="form-label">Fecha</label><input type="date" id="input-date" class="form-input"></div>
+          <div class="form-group"><label class="form-label">Hora</label><input type="time" id="input-time" class="form-input"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Spot</label><input type="text" id="input-spot" class="form-input" placeholder="Ej: La Barceloneta"></div>
+        <div class="form-group">
+          <label class="form-label">Puntuación</label>
+          <div class="star-rating" id="star-rating-log">
+            <button class="star-btn" onclick="setRating(1)">★</button><button class="star-btn" onclick="setRating(2)">★</button>
+            <button class="star-btn" onclick="setRating(3)">★</button><button class="star-btn" onclick="setRating(4)">★</button>
+            <button class="star-btn" onclick="setRating(5)">★</button>
+          </div>
+        </div>
+        <button class="btn-secondary" onclick="fillFormFromBCN()">📡 Rellenar con datos de la Boya</button>
+        <div class="form-grid-4">
+          <div class="form-group"><label class="form-label">Hs (m)</label><input type="number" id="input-wave-height" class="form-input" step="0.1"></div>
+          <div class="form-group"><label class="form-label">Hmax</label><input type="number" id="input-wave-max" class="form-input" step="0.1"></div>
+          <div class="form-group"><label class="form-label">Tp (s)</label><input type="number" id="input-period" class="form-input" step="0.5"></div>
+          <div class="form-group"><label class="form-label">Dir.</label><select id="input-sea-dir" class="form-input"><option value="">-</option><option>N</option><option>NE</option><option>E</option><option>SE</option><option>S</option><option>SO</option><option>O</option><option>NO</option></select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Notas</label><textarea id="input-notes" class="form-input" placeholder="¿Había mucha gente?"></textarea></div>
+        <button class="btn-primary" onclick="submitSession()">💾 Guardar en la Nube</button>
+      </div>
+    </section>
+
+    <section id="panel-history" class="panel">
+      <div class="glass-card">
+        <div class="section-title">🏄 Sesiones del Grupo</div>
+        <div id="sessions-list"></div>
+      </div>
+    </section>
+
+    <section id="panel-oracle" class="panel">
+      <div class="glass-card">
+        <div class="section-title">🔮 El Oráculo</div>
+        <p class="text-xs text-slate-500 mb-4">¿Dónde deberíamos ir hoy según la experiencia del grupo?</p>
+        <div class="form-grid-3">
+          <div class="form-group"><label class="form-label">Hs (m)</label><input type="number" id="oracle-wave-height" class="form-input" step="0.1"></div>
+          <div class="form-group"><label class="form-label">Tp (s)</label><input type="number" id="oracle-period" class="form-input" step="0.5"></div>
+          <div class="form-group"><label class="form-label">Dir.</label><select id="oracle-sea-dir" class="form-input"><option value="">-</option><option>N</option><option>NE</option><option>E</option><option>SE</option><option>S</option><option>SO</option><option>O</option><option>NO</option></select></div>
+        </div>
+        <button class="btn-primary btn-oracle" onclick="runOracle()">🔮 Consultar</button>
+        <div id="oracle-result" class="mt-4"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // --- TUS KEYS ---
+    const SUPABASE_URL = 'https://vpmpgxiwrquzbcahsnfs.supabase.co'; 
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwbXBneGl3cnF1emJjYWhzbmZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0MjM3MjgsImV4cCI6MjA5Mzk5OTcyOH0.GJH0k3dxtQ_xMHmCphAl1INRzraf20LbBv4LTOzXWNw';
+    
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let currentRating = 0;
+    let bcnConditions = null;
+
+    // --- PESTAÑAS ---
+    function switchTab(tabId) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('panel-' + tabId).classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+      if (tabId === 'history') renderSessions();
+    }
+
+    // --- RATING ---
+    function setRating(v) {
+      currentRating = v;
+      document.querySelectorAll('#star-rating-log .star-btn').forEach((b, i) => b.classList.toggle('active', i < v));
+    }
+
+    // --- BOYA ---
+    async function fetchPortusData() {
+      try {
+        const res = await fetch('https://marine-api.open-meteo.com/v1/marine?latitude=41.38&longitude=2.17&current=wave_height,wave_period,wave_direction');
+        const data = await res.json();
+        const c = data.current;
+        const dirs = ['N','NE','E','SE','S','SO','O','NO'];
+        const dir = dirs[Math.round(c.wave_direction / 45) % 8];
+        bcnConditions = { hs: c.wave_height, tp: c.wave_period, dir: dir };
+        
+        document.getElementById('conditions-content').innerHTML = `
+          <div class="conditions-grid">
+            <div class="condition-item"><div class="condition-value">${c.wave_height}</div><div class="condition-label">Hs (m)</div></div>
+            <div class="condition-item"><div class="condition-value">${c.wave_period}</div><div class="condition-label">Tp (s)</div></div>
+            <div class="condition-item"><div class="condition-value">${dir}</div><div class="condition-label">Dir</div></div>
+          </div>`;
+      } catch (e) {
+        document.getElementById('conditions-content').innerHTML = '<div class="text-xs text-red-400">Error al cargar datos</div>';
+      }
+    }
+
+    function fillFormFromBCN() {
+      if (!bcnConditions) return;
+      document.getElementById('input-wave-height').value = bcnConditions.hs;
+      document.getElementById('input-wave-max').value = (bcnConditions.hs * 1.5).toFixed(1);
+      document.getElementById('input-period').value = bcnConditions.tp;
+      document.getElementById('input-sea-dir').value = bcnConditions.dir;
+    }
+
+    // --- ACCIONES SUPABASE ---
+    async function submitSession() {
+      const session = {
+        spot: document.getElementById('input-spot').value,
+        datetime: document.getElementById('input-date').value + 'T' + document.getElementById('input-time').value,
+        rating: currentRating,
+        waveHeight: parseFloat(document.getElementById('input-wave-height').value),
+        waveMax: parseFloat(document.getElementById('input-wave-max').value),
+        period: parseFloat(document.getElementById('input-period').value),
+        seaDir: document.getElementById('input-sea-dir').value,
+        notes: document.getElementById('input-notes').value
+      };
+
+      if (!session.spot || !currentRating) return showToast('Falta spot o puntuación', true);
+
+      const { error } = await supabaseClient.from('sessions').insert([session]);
+      if (error) {
+        showToast('Error al guardar', true);
+        console.error(error);
+      } else {
+        showToast('¡Guardado en el grupo! 🤙');
+        document.getElementById('input-spot').value = '';
+        document.getElementById('input-notes').value = '';
+        setRating(0);
+      }
+    }
+
+    async function renderSessions() {
+      const container = document.getElementById('sessions-list');
+      container.innerHTML = '<p class="text-xs text-slate-500">Cargando...</p>';
+      
+      const { data, error } = await supabaseClient.from('sessions').select('*').order('datetime', { ascending: false });
+      
+      if (error || !data) return container.innerHTML = '<p>Error al cargar</p>';
+      if (data.length === 0) return container.innerHTML = '<p class="text-xs text-slate-500">Aún no hay baños registrados.</p>';
+
+      container.innerHTML = data.map(s => `
+        <div class="session-card">
+          <button class="delete-btn" onclick="deleteSession('${s.id}')">✕</button>
+          <div class="flex justify-between items-start mb-1">
+            <div class="session-spot">${s.spot}</div>
+            <div class="text-amber-400 text-xs">${'★'.repeat(s.rating)}</div>
+          </div>
+          <div class="session-date">${new Date(s.datetime).toLocaleDateString()}</div>
+          <div>
+            <span class="condition-tag">🌊 ${s.waveHeight}m</span>
+            <span class="condition-tag">⏱ ${s.period}s</span>
+            <span class="condition-tag">🧭 ${s.seaDir}</span>
+          </div>
+          ${s.notes ? `<p class="text-[10px] text-slate-400 mt-2 italic">"${s.notes}"</p>` : ''}
+        </div>
+      `).join('');
+    }
+
+    async function deleteSession(id) {
+      if (!confirm('¿Borrar este baño?')) return;
+      await supabaseClient.from('sessions').delete().eq('id', id);
+      renderSessions();
+    }
+
+    async function runOracle() {
+      const h = parseFloat(document.getElementById('oracle-wave-height').value);
+      const { data } = await supabaseClient.from('sessions').select('*');
+      if (!data || data.length === 0) return;
+
+      const best = data.filter(s => Math.abs(s.waveHeight - h) < 0.4).sort((a,b) => b.rating - a.rating)[0];
+      const res = document.getElementById('oracle-result');
+      if (best) {
+        res.innerHTML = `<div class="p-4 bg-purple-900/30 border border-purple-500/50 rounded-xl">
+          <p class="text-[10px] uppercase tracking-widest text-purple-400 mb-1">Recomendación</p>
+          <p class="font-bold text-white text-lg">${best.spot}</p>
+          <p class="text-xs text-slate-400">Basado en un baño de ${best.rating} estrellas</p>
+        </div>`;
+      } else {
+        res.innerHTML = '<p class="text-xs text-slate-500">No hay datos suficientes para estas condiciones.</p>';
+      }
+    }
+
+    function showToast(msg, isError) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.background = isError ? '#ef4444' : '#14b8a6';
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+
+    // Inicio
+    document.getElementById('input-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('input-time').value = new Date().toTimeString().slice(0,5);
+    fetchPortusData();
+  </script>
+</body>
+</html>
