@@ -1,12 +1,3 @@
-// api/boya.js — Proxy para la Boya de Barcelona (Estacion 12) de Puertos del Estado
-// Desplegado como Serverless Function en Vercel
-// Acepta query params: ?fecha=YYYYMMDD&hora=HH:MM
-// Sin params devuelve el ultimo dato en tiempo real.
-
-// api/boya.js — Proxy Híbrido: Boya Oficial (Live) + Open-Meteo (Histórico)
-// Desplegado en Vercel.
-
-// api/boya.js — Proxy Blindado Vercel
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -22,60 +13,87 @@ export default async function handler(req, res) {
   let fuente = 'desconocida';
 
   try {
-    // 1. INTENTAR PUERTOS DEL ESTADO
+    // 1. INTENTAR PUERTOS DEL ESTADO (RTData)
     const urlPdE = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
-    const responsePdE = await fetch(urlPdE, { headers: { 'Accept': 'application/json' } });
+    const responsePdE = await fetch(urlPdE, { 
+        headers: { 
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        },
+        cache: 'no-store' // <- MAGIA 1: Evita que Vercel congele los datos antiguos
+    });
     
     if (responsePdE.ok) {
       const rawData = await responsePdE.json();
       const listaRegistros = Array.isArray(rawData) ? rawData : [rawData];
       
-      // SOLUCION: Ordenamos los datos de más reciente a más antiguo
+      // Ordenamos de más reciente a más antiguo
       listaRegistros.sort((a, b) => {
         const timeA = new Date(a.fecha || a.date || a.dateTime || 0).getTime();
         const timeB = new Date(b.fecha || b.date || b.dateTime || 0).getTime();
         return timeB - timeA;
       });
 
-      // Función interna para extraer datos sin repetir código
       function extraerDatos(reg) {
         let encontradoOlas = false;
         const listaDatos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
+        
         for (const item of listaDatos) {
-          const val = item.valor ?? item.value ?? item.v ?? item.dato;
-          if (val !== undefined && val !== null) {
-            const id = String(item.paramId || item.idVariable || item.id || "");
-            const name = String(item.nombre || item.param || item.variable || item.description || "").toLowerCase();
+           let val = null;
+           let keywords = "";
 
-            if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) { hs = parseFloat(val); encontradoOlas = true; }
-            else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) { hmax = parseFloat(val); }
-            else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) { tp = parseFloat(val); }
-            else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) { dirGrados = parseFloat(val); }
-          }
+           // MAGIA 2: Escáner bruto que ignora la estructura exacta del Gobierno
+           if (typeof item === 'object') {
+               for (let key in item) {
+                   const k = key.toLowerCase();
+                   const v = item[key];
+                   if (k.includes('valor') || k.includes('value') || k === 'v' || k === 'dato' || k === 'val') {
+                       val = v;
+                   } else {
+                       keywords += " " + String(v).toLowerCase() + " " + k + " ";
+                   }
+               }
+           }
+           
+           if (val !== null && val !== undefined) {
+               const num = parseFloat(String(val).replace(',', '.'));
+               
+               if (keywords.includes(' 1 ') || keywords.includes(' 32 ') || keywords.includes('sig') || keywords.includes('hs')) { hs = num; encontradoOlas = true; }
+               else if (keywords.includes(' 2 ') || keywords.includes(' 33 ') || keywords.includes('max') || keywords.includes('máx')) { hmax = num; }
+               else if (keywords.includes(' 4 ') || keywords.includes(' 34 ') || keywords.includes('pic') || keywords.includes('tp')) { tp = num; }
+               else if (keywords.includes(' 6 ') || keywords.includes(' 36 ') || keywords.includes('dir') || keywords.includes('proc')) { dirGrados = num; }
+           }
         }
+
         if (encontradoOlas) {
-          fechaHora = reg.fecha || reg.date || reg.dateTime;
+           let f = reg.fecha || reg.date || reg.dateTime || "";
+           // MAGIA 3: Forzar conversión a zona horaria de España
+           if (f && !f.includes('Z') && !f.includes('+')) f = f.trim() + 'Z';
+           fechaHora = f;
         }
         return encontradoOlas;
       }
 
       if (modoHistorico) {
-        const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+        const targetTimestamp = new Date(`${fecha}T${hora}:00Z`).getTime(); 
         let minDiff = Infinity;
         let registroElegido = null;
 
-        // Buscar la hora más cercana en la tabla oficial
         for (const reg of listaRegistros) {
-          const regTime = new Date(reg.fecha || reg.date || reg.dateTime).getTime();
+          let regTimeStr = reg.fecha || reg.date || reg.dateTime || "";
+          if (regTimeStr && !regTimeStr.includes('Z') && !regTimeStr.includes('+')) regTimeStr += 'Z';
+          const regTime = new Date(regTimeStr).getTime();
+          
           const diff = Math.abs(regTime - targetTimestamp);
           
           if (diff < minDiff) {
-            // Verificar si este bloque tiene datos de oleaje (Hs) antes de seleccionarlo
             let tieneOlas = false;
             const datos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
             for (const d of datos) {
-               const id = String(d.paramId || d.idVariable || d.id || "");
-               if (id === "1" || id === "32") tieneOlas = true;
+                let keys = JSON.stringify(d).toLowerCase();
+                if (keys.includes('sig') || keys.includes('hs') || keys.includes('"1"') || keys.includes(':1,') || keys.includes('paramid":1')) {
+                    tieneOlas = true;
+                }
             }
             if (tieneOlas) {
                 minDiff = diff;
@@ -85,16 +103,15 @@ export default async function handler(req, res) {
           }
         }
         
-        if (registroElegido && diferenciaMinutos <= 1440) { // Max 24h de diferencia
+        if (registroElegido && diferenciaMinutos <= 1440) { 
            extraerDatos(registroElegido);
            fuente = 'historico_puertos';
         }
       } else {
-        // Modo Live: buscar el primer registro (ahora el más nuevo) que tenga datos de oleaje
         for (const reg of listaRegistros) {
            if (extraerDatos(reg)) {
                fuente = 'live_puertos';
-               break; // Detenerse en el primero válido encontrado
+               break; 
            }
         }
       }
@@ -103,7 +120,7 @@ export default async function handler(req, res) {
     console.warn("Fallo en Puertos del Estado:", e.message);
   }
 
-  // 2. RED DE SEGURIDAD OPEN-METEO (Si fallan los puertos o el historial es muy antiguo)
+  // 2. RED DE SEGURIDAD OPEN-METEO
   if (hs === null && tp === null) {
     try {
         const lat = 41.38, lon = 2.17;
@@ -147,7 +164,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // 3. RESULTADO FINAL
+  // 3. RESPUESTA FINAL
   if (hs === null && tp === null) {
       return res.status(404).json({ error: 'No se encontraron datos.' });
   }
