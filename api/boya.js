@@ -3,8 +3,10 @@
 // Acepta query params: ?fecha=YYYYMMDD&hora=HH:MM
 // Sin params devuelve el ultimo dato en tiempo real.
 
+// api/boya.js — Proxy Híbrido: Boya Oficial (Live) + Open-Meteo (Histórico)
+// Desplegado en Vercel.
+
 export default async function handler(req, res) {
-  // Cabeceras CORS para que el frontend pueda llamar a este endpoint
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -13,150 +15,116 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // IDs de variables de la boya segun Puertos del Estado:
-  // 1 = Hs (altura significativa), 2 = Hmax, 4 = Tp (periodo pico), 6 = Direccion
-  const STATION_ID = 12;
-  const VAR_IDS = [1, 2, 4, 6];
-
   const { fecha, hora } = req.query;
   const modoHistorico = fecha && hora;
 
   try {
     if (modoHistorico) {
-      // --- MODO HISTORICO ---
-      // Consultamos el historico del dia solicitado y buscamos la medicion mas cercana a la hora dada
+      // ---------------------------------------------------------
+      // MODO HISTÓRICO: Open-Meteo (Fiabilidad 100% para el pasado)
+      // ---------------------------------------------------------
+      const lat = 41.38;
+      const lon = 2.17;
+      
+      const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction,wave_height_max&timezone=Europe%2FMadrid&start_date=${fecha}&end_date=${fecha}`;
 
-      // Construimos la fecha en formato YYYYMMDD
-      const fechaStr = fecha.replace(/-/g, ''); // admite tanto YYYY-MM-DD como YYYYMMDD
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Error al consultar Open-Meteo');
+      
+      const data = await response.json();
 
-      // URL del servicio de datos historicos de Puertos del Estado
-      // Devuelve un JSON con todas las mediciones del dia para la estacion y variables dadas
-      const variablesParam = VAR_IDS.join(',');
-      const url = `https://portus.puertos.es/portushin/rest/measurements/station/${STATION_ID}/variables/${variablesParam}/date/${fechaStr}`;
+      if (!data.hourly || !data.hourly.time || data.hourly.time.length === 0) {
+        return res.status(404).json({ error: 'No hay datos para esta fecha.' });
+      }
 
-      const response = await fetch(url, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'WaveLog/1.0'
+      const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+      let bestIdx = 0;
+      let minDiff = Infinity;
+
+      data.hourly.time.forEach((timeStr, i) => {
+        const diff = Math.abs(new Date(timeStr).getTime() - targetTimestamp);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestIdx = i;
         }
       });
 
-      if (!response.ok) {
-        throw new Error(`Puertos del Estado respondio con status ${response.status}`);
-      }
+      const diferenciaMinutos = Math.round(minDiff / 60000);
 
-      const rawData = await response.json();
+      const hs = data.hourly.wave_height[bestIdx];
+      const tp = data.hourly.wave_period[bestIdx];
+      const hmax = data.hourly.wave_height_max[bestIdx];
+      const dirGrados = data.hourly.wave_direction[bestIdx];
 
-      // Parseamos la hora objetivo a minutos desde medianoche para comparar
-      const [horaObj, minObj] = hora.split(':').map(Number);
-      const minutosObjetivo = horaObj * 60 + minObj;
-
-      // La API devuelve un array de mediciones. Cada medicion tiene:
-      // { dateTime: "YYYY-MM-DDTHH:MM:SSZ", measurements: [ { idVariable: N, value: X }, ... ] }
-      if (!Array.isArray(rawData) || rawData.length === 0) {
-        return res.status(404).json({ error: 'No hay datos historicos para esta fecha.' });
-      }
-
-      // Encontramos la medicion mas cercana en tiempo a la hora solicitada
-      let mejorMedicion = null;
-      let menorDiferencia = Infinity;
-
-      for (const entry of rawData) {
-        if (!entry.dateTime) continue;
-        const dtParts = entry.dateTime.split('T');
-        if (!dtParts[1]) continue;
-        const timeParts = dtParts[1].replace('Z', '').split(':');
-        const h = parseInt(timeParts[0], 10);
-        const m = parseInt(timeParts[1], 10);
-        const minutosEntrada = h * 60 + m;
-        const diff = Math.abs(minutosEntrada - minutosObjetivo);
-        if (diff < menorDiferencia) {
-          menorDiferencia = diff;
-          mejorMedicion = entry;
-        }
-      }
-
-      if (!mejorMedicion) {
-        return res.status(404).json({ error: 'No se encontro medicion cercana.' });
-      }
-
-      const resultado = extraerVariables(mejorMedicion.measurements);
-      resultado.fechaHora = mejorMedicion.dateTime;
-      resultado.modo = 'historico';
-      resultado.diferenciaMinutos = menorDiferencia;
-
-      return res.status(200).json(resultado);
+      return res.status(200).json({
+        modo: 'historico_openmeteo',
+        hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
+        hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
+        tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
+        dir: gradosACardinal(dirGrados),
+        diferenciaMinutos: diferenciaMinutos,
+        fechaHora: data.hourly.time[bestIdx]
+      });
 
     } else {
-      // --- MODO TIEMPO REAL ---
-      // Consultamos el ultimo dato disponible de la boya
-      const variablesParam = VAR_IDS.join(',');
-      const url = `https://portus.puertos.es/portushin/rest/measurements/station/${STATION_ID}/variables/${variablesParam}/last`;
-
+      // ---------------------------------------------------------
+      // MODO LIVE: Puertos del Estado (La URL secreta cazada)
+      // ---------------------------------------------------------
+      const url = 'https://portus.puertos.es/portussvr/api/lastData/positions/1731';
+      
       const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'WaveLog/1.0'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
         }
       });
 
       if (!response.ok) {
-        throw new Error(`Puertos del Estado respondio con status ${response.status}`);
+        throw new Error(`Puertos del Estado devolvió status ${response.status}`);
       }
 
       const rawData = await response.json();
+      const list = Array.isArray(rawData) ? rawData : (rawData.data || rawData.measurements || []);
 
-      // En modo live la API devuelve directamente un objeto o un array de un solo elemento
-      const measurements = Array.isArray(rawData)
-        ? rawData[0]?.measurements
-        : rawData.measurements;
-
-      if (!measurements) {
-        throw new Error('Formato de respuesta inesperado de Puertos del Estado');
+      if (list.length === 0) {
+         throw new Error('Respuesta vacía de la boya');
       }
 
-      const fechaHora = Array.isArray(rawData) ? rawData[0]?.dateTime : rawData.dateTime;
-      const resultado = extraerVariables(measurements);
-      resultado.fechaHora = fechaHora || new Date().toISOString();
-      resultado.modo = 'live';
+      let hs = null, hmax = null, tp = null, dirGrados = null, fechaHora = null;
 
-      return res.status(200).json(resultado);
+      // Analizador dinámico para atrapar los datos vengan como vengan
+      for (const item of list) {
+        const id = item.paramId || item.idVariable || item.param || item.id;
+        const val = item.valor !== undefined ? item.valor : item.value;
+        const time = item.fechaHora || item.dateTime || item.date;
+
+        if (id == 1) { hs = val; if (time) fechaHora = time; }
+        if (id == 2) { hmax = val; }
+        if (id == 4) { tp = val; }
+        if (id == 6) { dirGrados = val; }
+      }
+
+      return res.status(200).json({
+        modo: 'live_puertos',
+        hs: hs !== null ? parseFloat(parseFloat(hs).toFixed(2)) : null,
+        hmax: hmax !== null ? parseFloat(parseFloat(hmax).toFixed(2)) : null,
+        tp: tp !== null ? parseFloat(parseFloat(tp).toFixed(1)) : null,
+        dir: gradosACardinal(dirGrados),
+        fechaHora: fechaHora || new Date().toISOString()
+      });
     }
 
   } catch (error) {
     console.error('[api/boya] Error:', error.message);
     return res.status(500).json({
-      error: 'No se pudieron obtener datos de Puertos del Estado.',
+      error: 'Fallo interno en el proxy.',
       detalle: error.message
     });
   }
 }
 
-// Extrae y mapea las variables de interes desde el array de measurements de la API
-function extraerVariables(measurements) {
-  const map = {};
-  if (Array.isArray(measurements)) {
-    for (const m of measurements) {
-      map[m.idVariable] = m.value;
-    }
-  }
-
-  // Convertimos la direccion en grados a punto cardinal (8 rumbos)
-  const dirGrados = parseFloat(map[6]);
-  const puntoCardinal = gradosACardinal(dirGrados);
-
-  return {
-    hs:  map[1] !== undefined ? parseFloat(parseFloat(map[1]).toFixed(2)) : null,
-    hmax: map[2] !== undefined ? parseFloat(parseFloat(map[2]).toFixed(2)) : null,
-    tp:  map[4] !== undefined ? parseFloat(parseFloat(map[4]).toFixed(1)) : null,
-    dirGrados: isNaN(dirGrados) ? null : Math.round(dirGrados),
-    dir: puntoCardinal
-  };
-}
-
-// Convierte grados a punto cardinal de 8 rumbos
 function gradosACardinal(grados) {
-  if (isNaN(grados)) return '--';
+  if (grados === null || isNaN(grados)) return '--';
   const rumbos = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
   const indice = Math.round(((grados % 360) + 360) % 360 / 45) % 8;
   return rumbos[indice];
