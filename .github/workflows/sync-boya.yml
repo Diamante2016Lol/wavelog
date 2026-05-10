@@ -2,14 +2,12 @@ name: Sync Boya Barcelona
 
 on:
   schedule:
-    - cron: '0 * * * *'   # cada hora en punto (UTC)
-  workflow_dispatch:     
-  # permite ejecutarlo manualmente desde GitHub
+    - cron: '0 * * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repositorio
         uses: actions/checkout@v4
@@ -20,7 +18,9 @@ jobs:
           node-version: '20'
 
       - name: Instalar dependencias
-        run: npm install @supabase/supabase-js
+        run: |
+          echo '{"name":"wavelog","version":"1.0.0","type":"module"}' > package.json
+          npm install @supabase/supabase-js
 
       - name: Ejecutar sync de la boya
         run: node scripts/sync-boya.mjs
