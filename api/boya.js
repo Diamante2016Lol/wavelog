@@ -22,7 +22,7 @@ export default async function handler(req, res) {
   let fuente = 'desconocida';
 
   try {
-    // 1. INTENTAR PUERTOS DEL ESTADO (RTData tiene el historial reciente)
+    // 1. INTENTAR PUERTOS DEL ESTADO
     const urlPdE = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
     const responsePdE = await fetch(urlPdE, { headers: { 'Accept': 'application/json' } });
     
@@ -30,50 +30,72 @@ export default async function handler(req, res) {
       const rawData = await responsePdE.json();
       const listaRegistros = Array.isArray(rawData) ? rawData : [rawData];
       
-      let registroElegido = null;
+      // SOLUCION: Ordenamos los datos de más reciente a más antiguo
+      listaRegistros.sort((a, b) => {
+        const timeA = new Date(a.fecha || a.date || a.dateTime || 0).getTime();
+        const timeB = new Date(b.fecha || b.date || b.dateTime || 0).getTime();
+        return timeB - timeA;
+      });
 
-      if (modoHistorico) {
-        // Buscar la hora exacta dentro de la tabla oficial del Gobierno
-        const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
-        let minDiff = Infinity;
-
-        for (const reg of listaRegistros) {
-          const regTime = new Date(reg.fecha || reg.date || reg.dateTime).getTime();
-          const diff = Math.abs(regTime - targetTimestamp);
-          if (diff < minDiff) {
-            minDiff = diff;
-            registroElegido = reg;
-            diferenciaMinutos = Math.round(diff / 60000);
-          }
-        }
-        
-        // Si pedimos un dato de hace semanas, RTData no lo tendra. Lo pasamos al Plan B.
-        if (diferenciaMinutos > 1440) {
-           registroElegido = null; 
-        }
-      } else {
-        // Modo live: el primer dato de la tabla
-        registroElegido = listaRegistros[0];
-      }
-
-      if (registroElegido) {
-        fechaHora = registroElegido.fecha || registroElegido.date || registroElegido.dateTime;
-        const listaDatos = registroElegido.datos || registroElegido.measurements || registroElegido.data || (Array.isArray(registroElegido) ? registroElegido : []);
-
+      // Función interna para extraer datos sin repetir código
+      function extraerDatos(reg) {
+        let encontradoOlas = false;
+        const listaDatos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
         for (const item of listaDatos) {
           const val = item.valor ?? item.value ?? item.v ?? item.dato;
           if (val !== undefined && val !== null) {
             const id = String(item.paramId || item.idVariable || item.id || "");
             const name = String(item.nombre || item.param || item.variable || item.description || "").toLowerCase();
 
-            if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) hs = parseFloat(val);
-            else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) hmax = parseFloat(val);
-            else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) tp = parseFloat(val);
-            else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) dirGrados = parseFloat(val);
+            if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) { hs = parseFloat(val); encontradoOlas = true; }
+            else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) { hmax = parseFloat(val); }
+            else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) { tp = parseFloat(val); }
+            else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) { dirGrados = parseFloat(val); }
           }
         }
-        if (hs !== null || tp !== null) {
-            fuente = modoHistorico ? 'historico_puertos' : 'live_puertos';
+        if (encontradoOlas) {
+          fechaHora = reg.fecha || reg.date || reg.dateTime;
+        }
+        return encontradoOlas;
+      }
+
+      if (modoHistorico) {
+        const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+        let minDiff = Infinity;
+        let registroElegido = null;
+
+        // Buscar la hora más cercana en la tabla oficial
+        for (const reg of listaRegistros) {
+          const regTime = new Date(reg.fecha || reg.date || reg.dateTime).getTime();
+          const diff = Math.abs(regTime - targetTimestamp);
+          
+          if (diff < minDiff) {
+            // Verificar si este bloque tiene datos de oleaje (Hs) antes de seleccionarlo
+            let tieneOlas = false;
+            const datos = reg.datos || reg.measurements || reg.data || (Array.isArray(reg) ? reg : []);
+            for (const d of datos) {
+               const id = String(d.paramId || d.idVariable || d.id || "");
+               if (id === "1" || id === "32") tieneOlas = true;
+            }
+            if (tieneOlas) {
+                minDiff = diff;
+                registroElegido = reg;
+                diferenciaMinutos = Math.round(diff / 60000);
+            }
+          }
+        }
+        
+        if (registroElegido && diferenciaMinutos <= 1440) { // Max 24h de diferencia
+           extraerDatos(registroElegido);
+           fuente = 'historico_puertos';
+        }
+      } else {
+        // Modo Live: buscar el primer registro (ahora el más nuevo) que tenga datos de oleaje
+        for (const reg of listaRegistros) {
+           if (extraerDatos(reg)) {
+               fuente = 'live_puertos';
+               break; // Detenerse en el primero válido encontrado
+           }
         }
       }
     }
@@ -81,7 +103,7 @@ export default async function handler(req, res) {
     console.warn("Fallo en Puertos del Estado:", e.message);
   }
 
-  // 2. RED DE SEGURIDAD: OPEN-METEO (Para baños de hace meses)
+  // 2. RED DE SEGURIDAD OPEN-METEO (Si fallan los puertos o el historial es muy antiguo)
   if (hs === null && tp === null) {
     try {
         const lat = 41.38, lon = 2.17;
@@ -125,9 +147,9 @@ export default async function handler(req, res) {
     }
   }
 
-  // 3. RESPUESTA FINAL
+  // 3. RESULTADO FINAL
   if (hs === null && tp === null) {
-      return res.status(404).json({ error: 'No se encontraron datos en ninguna fuente.' });
+      return res.status(404).json({ error: 'No se encontraron datos.' });
   }
 
   return res.status(200).json({
