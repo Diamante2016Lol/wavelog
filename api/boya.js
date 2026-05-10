@@ -17,101 +17,128 @@ export default async function handler(req, res) {
   const { fecha, hora } = req.query;
   const modoHistorico = fecha && hora;
 
+  let hs = null, hmax = null, tp = null, dirGrados = null, fechaHora = null;
+  let diferenciaMinutos = 0;
+  let fuente = 'desconocida';
+
   try {
-    if (modoHistorico) {
-      const lat = 41.38, lon = 2.17;
-      const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction&timezone=Europe/Madrid&start_date=${fecha}&end_date=${fecha}`;
-
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Open-Meteo fallo status ${response.status}`);
+    // 1. INTENTAR PUERTOS DEL ESTADO (RTData tiene el historial reciente)
+    const urlPdE = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
+    const responsePdE = await fetch(urlPdE, { headers: { 'Accept': 'application/json' } });
+    
+    if (responsePdE.ok) {
+      const rawData = await responsePdE.json();
+      const listaRegistros = Array.isArray(rawData) ? rawData : [rawData];
       
-      const data = await response.json();
-      if (!data.hourly || !data.hourly.time || data.hourly.time.length === 0) {
-        return res.status(404).json({ error: 'No hay datos para esta fecha.' });
-      }
+      let registroElegido = null;
 
-      const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
-      let bestIdx = 0, minDiff = Infinity;
+      if (modoHistorico) {
+        // Buscar la hora exacta dentro de la tabla oficial del Gobierno
+        const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+        let minDiff = Infinity;
 
-      data.hourly.time.forEach((timeStr, i) => {
-        const diff = Math.abs(new Date(timeStr).getTime() - targetTimestamp);
-        if (diff < minDiff) { minDiff = diff; bestIdx = i; }
-      });
-
-      const hs = data.hourly.wave_height[bestIdx];
-      const tp = data.hourly.wave_period[bestIdx];
-      const dirGrados = data.hourly.wave_direction[bestIdx];
-
-      return res.status(200).json({
-        modo: 'historico_openmeteo',
-        hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
-        hmax: hs !== null ? parseFloat((hs * 1.5).toFixed(2)) : null,
-        tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
-        dir: gradosACardinal(dirGrados),
-        diferenciaMinutos: Math.round(minDiff / 60000),
-        fechaHora: data.hourly.time[bestIdx]
-      });
-
-    } else {
-      let hs = null, hmax = null, tp = null, dirGrados = null, fechaHora = null;
-
-      try {
-        const url = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
-        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
-        
-        if (response.ok) {
-          const rawData = await response.json();
-          
-          let registro = Array.isArray(rawData) ? rawData[0] : rawData;
-          
-          if (registro) {
-            fechaHora = registro.fecha || registro.date || registro.dateTime;
-            const listaDatos = registro.datos || registro.measurements || registro.data || (Array.isArray(registro) ? registro : []);
-
-            for (const item of listaDatos) {
-              const val = item.valor ?? item.value ?? item.v ?? item.dato;
-              if (val !== undefined && val !== null) {
-                const id = String(item.paramId || item.idVariable || item.id || "");
-                const name = String(item.nombre || item.param || item.variable || item.description || "").toLowerCase();
-
-                if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) hs = parseFloat(val);
-                else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) hmax = parseFloat(val);
-                else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) tp = parseFloat(val);
-                else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) dirGrados = parseFloat(val);
-              }
-            }
+        for (const reg of listaRegistros) {
+          const regTime = new Date(reg.fecha || reg.date || reg.dateTime).getTime();
+          const diff = Math.abs(regTime - targetTimestamp);
+          if (diff < minDiff) {
+            minDiff = diff;
+            registroElegido = reg;
+            diferenciaMinutos = Math.round(diff / 60000);
           }
         }
-      } catch (e) {
-        console.warn("Fallo en Puertos del Estado, activando Open-Meteo.");
+        
+        // Si pedimos un dato de hace semanas, RTData no lo tendra. Lo pasamos al Plan B.
+        if (diferenciaMinutos > 1440) {
+           registroElegido = null; 
+        }
+      } else {
+        // Modo live: el primer dato de la tabla
+        registroElegido = listaRegistros[0];
       }
 
-      if (hs === null && tp === null) {
-        const lat = 41.38, lon = 2.17;
-        const omUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height,wave_period,wave_direction&timezone=Europe/Madrid`;
-        const omRes = await fetch(omUrl);
-        if (omRes.ok) {
-          const omData = await omRes.json();
-          hs = omData.current.wave_height;
-          tp = omData.current.wave_period;
-          dirGrados = omData.current.wave_direction;
-          hmax = hs ? hs * 1.5 : null;
-          fechaHora = omData.current.time;
+      if (registroElegido) {
+        fechaHora = registroElegido.fecha || registroElegido.date || registroElegido.dateTime;
+        const listaDatos = registroElegido.datos || registroElegido.measurements || registroElegido.data || (Array.isArray(registroElegido) ? registroElegido : []);
+
+        for (const item of listaDatos) {
+          const val = item.valor ?? item.value ?? item.v ?? item.dato;
+          if (val !== undefined && val !== null) {
+            const id = String(item.paramId || item.idVariable || item.id || "");
+            const name = String(item.nombre || item.param || item.variable || item.description || "").toLowerCase();
+
+            if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) hs = parseFloat(val);
+            else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) hmax = parseFloat(val);
+            else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) tp = parseFloat(val);
+            else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) dirGrados = parseFloat(val);
+          }
+        }
+        if (hs !== null || tp !== null) {
+            fuente = modoHistorico ? 'historico_puertos' : 'live_puertos';
         }
       }
-
-      return res.status(200).json({
-        modo: hs !== null ? 'live' : 'error',
-        hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
-        hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
-        tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
-        dir: gradosACardinal(dirGrados),
-        fechaHora: fechaHora || new Date().toISOString()
-      });
     }
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
+  } catch (e) {
+    console.warn("Fallo en Puertos del Estado:", e.message);
   }
+
+  // 2. RED DE SEGURIDAD: OPEN-METEO (Para baños de hace meses)
+  if (hs === null && tp === null) {
+    try {
+        const lat = 41.38, lon = 2.17;
+        if (modoHistorico) {
+            const omUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction&timezone=Europe/Madrid&start_date=${fecha}&end_date=${fecha}`;
+            const omRes = await fetch(omUrl);
+            if (omRes.ok) {
+                const data = await omRes.json();
+                if (data.hourly && data.hourly.time && data.hourly.time.length > 0) {
+                    const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
+                    let bestIdx = 0, minDiff = Infinity;
+                    data.hourly.time.forEach((timeStr, i) => {
+                        const diff = Math.abs(new Date(timeStr).getTime() - targetTimestamp);
+                        if (diff < minDiff) { minDiff = diff; bestIdx = i; }
+                    });
+                    
+                    hs = data.hourly.wave_height[bestIdx];
+                    tp = data.hourly.wave_period[bestIdx];
+                    dirGrados = data.hourly.wave_direction[bestIdx];
+                    hmax = hs !== null ? parseFloat((hs * 1.5).toFixed(2)) : null;
+                    fechaHora = data.hourly.time[bestIdx];
+                    diferenciaMinutos = Math.round(minDiff / 60000);
+                    fuente = 'historico_openmeteo';
+                }
+            }
+        } else {
+            const omUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height,wave_period,wave_direction&timezone=Europe/Madrid`;
+            const omRes = await fetch(omUrl);
+            if (omRes.ok) {
+                const omData = await omRes.json();
+                hs = omData.current.wave_height;
+                tp = omData.current.wave_period;
+                dirGrados = omData.current.wave_direction;
+                hmax = hs ? hs * 1.5 : null;
+                fechaHora = omData.current.time;
+                fuente = 'live_openmeteo';
+            }
+        }
+    } catch (e) {
+        console.warn("Fallo en Open-Meteo:", e.message);
+    }
+  }
+
+  // 3. RESPUESTA FINAL
+  if (hs === null && tp === null) {
+      return res.status(404).json({ error: 'No se encontraron datos en ninguna fuente.' });
+  }
+
+  return res.status(200).json({
+    modo: fuente,
+    hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
+    hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
+    tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
+    dir: gradosACardinal(dirGrados),
+    diferenciaMinutos: diferenciaMinutos,
+    fechaHora: fechaHora || new Date().toISOString()
+  });
 }
 
 function gradosACardinal(grados) {
