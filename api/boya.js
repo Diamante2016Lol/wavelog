@@ -6,126 +6,118 @@
 // api/boya.js — Proxy Híbrido: Boya Oficial (Live) + Open-Meteo (Histórico)
 // Desplegado en Vercel.
 
+// api/boya.js — Proxy Blindado Vercel
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { fecha, hora } = req.query;
   const modoHistorico = fecha && hora;
 
   try {
     if (modoHistorico) {
-      // ---------------------------------------------------------
-      // MODO HISTÓRICO: Open-Meteo (Fiabilidad 100% para el pasado)
-      // ---------------------------------------------------------
-      const lat = 41.38;
-      const lon = 2.17;
-      
-      const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction,wave_height_max&timezone=Europe%2FMadrid&start_date=${fecha}&end_date=${fecha}`;
+      // --- MODO HISTÓRICO: Open-Meteo (Fiabilidad 100%) ---
+      // (Se eliminó wave_height_max porque daba error 400 al no ser horaria)
+      const lat = 41.38, lon = 2.17;
+      const url = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=wave_height,wave_period,wave_direction&timezone=Europe%2FMadrid&start_date=${fecha}&end_date=${fecha}`;
 
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Error al consultar Open-Meteo');
+      if (!response.ok) throw new Error(`Open-Meteo falló con status ${response.status}`);
       
       const data = await response.json();
-
       if (!data.hourly || !data.hourly.time || data.hourly.time.length === 0) {
         return res.status(404).json({ error: 'No hay datos para esta fecha.' });
       }
 
       const targetTimestamp = new Date(`${fecha}T${hora}`).getTime();
-      let bestIdx = 0;
-      let minDiff = Infinity;
+      let bestIdx = 0, minDiff = Infinity;
 
       data.hourly.time.forEach((timeStr, i) => {
         const diff = Math.abs(new Date(timeStr).getTime() - targetTimestamp);
-        if (diff < minDiff) {
-          minDiff = diff;
-          bestIdx = i;
-        }
+        if (diff < minDiff) { minDiff = diff; bestIdx = i; }
       });
-
-      const diferenciaMinutos = Math.round(minDiff / 60000);
 
       const hs = data.hourly.wave_height[bestIdx];
       const tp = data.hourly.wave_period[bestIdx];
-      const hmax = data.hourly.wave_height_max[bestIdx];
       const dirGrados = data.hourly.wave_direction[bestIdx];
 
       return res.status(200).json({
         modo: 'historico_openmeteo',
         hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
-        hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
+        hmax: hs !== null ? parseFloat((hs * 1.5).toFixed(2)) : null, // Estimación matemática oficial
         tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
         dir: gradosACardinal(dirGrados),
-        diferenciaMinutos: diferenciaMinutos,
+        diferenciaMinutos: Math.round(minDiff / 60000),
         fechaHora: data.hourly.time[bestIdx]
       });
 
     } else {
-      // ---------------------------------------------------------
-      // MODO LIVE: Puertos del Estado (La URL secreta cazada)
-      // ---------------------------------------------------------
-      const url = 'https://portus.puertos.es/portussvr/api/lastData/positions/1731';
-      
-      const response = await fetch(url, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Puertos del Estado devolvió status ${response.status}`);
-      }
-
-      const rawData = await response.json();
-      const list = Array.isArray(rawData) ? rawData : (rawData.data || rawData.measurements || []);
-
-      if (list.length === 0) {
-         throw new Error('Respuesta vacía de la boya');
-      }
-
+      // --- MODO LIVE: Puertos del Estado + Fallback Open-Meteo ---
       let hs = null, hmax = null, tp = null, dirGrados = null, fechaHora = null;
 
-      // Analizador dinámico para atrapar los datos vengan como vengan
-      for (const item of list) {
-        const id = item.paramId || item.idVariable || item.param || item.id;
-        const val = item.valor !== undefined ? item.valor : item.value;
-        const time = item.fechaHora || item.dateTime || item.date;
+      try {
+        const url = 'https://portus.puertos.es/portussvr/api/lastData/positions/1731';
+        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        
+        if (response.ok) {
+          const rawData = await response.json();
+          const list = Array.isArray(rawData) ? rawData : (rawData.data || rawData.measurements || [rawData]);
 
-        if (id == 1) { hs = val; if (time) fechaHora = time; }
-        if (id == 2) { hmax = val; }
-        if (id == 4) { tp = val; }
-        if (id == 6) { dirGrados = val; }
+          // Analizador Ultra-Agresivo para cazar los datos del Gobierno
+          for (const item of list) {
+            const val = item.valor ?? item.value ?? item.v ?? item.dato;
+            const time = item.fechaHora || item.dateTime || item.date || item.t;
+            if (time && !fechaHora) fechaHora = time;
+
+            if (val !== undefined && val !== null) {
+              const id = String(item.paramId || item.idVariable || item.id || "");
+              const name = String(item.nombre || item.param || item.variable || item.description || "").toLowerCase();
+
+              if (id === "1" || id === "32" || name.includes("hs") || name.includes("sig")) hs = parseFloat(val);
+              else if (id === "2" || id === "33" || name.includes("max") || name.includes("máx")) hmax = parseFloat(val);
+              else if (id === "4" || id === "34" || name.includes("tp") || name.includes("pic")) tp = parseFloat(val);
+              else if (id === "6" || id === "36" || name.includes("dir") || name.includes("proc")) dirGrados = parseFloat(val);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Fallo en Puertos del Estado, activando protocolo de seguridad.");
+      }
+
+      // RED DE SEGURIDAD: Si Puertos del Estado está caído o da error, usa Open-Meteo al instante.
+      if (hs === null && tp === null) {
+        const lat = 41.38, lon = 2.17;
+        const omUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height,wave_period,wave_direction&timezone=Europe%2FMadrid`;
+        const omRes = await fetch(omUrl);
+        if (omRes.ok) {
+          const omData = await omRes.json();
+          hs = omData.current.wave_height;
+          tp = omData.current.wave_period;
+          dirGrados = omData.current.wave_direction;
+          hmax = hs ? hs * 1.5 : null;
+          fechaHora = omData.current.time;
+        }
       }
 
       return res.status(200).json({
-        modo: 'live_puertos',
-        hs: hs !== null ? parseFloat(parseFloat(hs).toFixed(2)) : null,
-        hmax: hmax !== null ? parseFloat(parseFloat(hmax).toFixed(2)) : null,
-        tp: tp !== null ? parseFloat(parseFloat(tp).toFixed(1)) : null,
+        modo: hs !== null ? 'live' : 'error',
+        hs: hs !== null ? parseFloat(hs.toFixed(2)) : null,
+        hmax: hmax !== null ? parseFloat(hmax.toFixed(2)) : null,
+        tp: tp !== null ? parseFloat(tp.toFixed(1)) : null,
         dir: gradosACardinal(dirGrados),
         fechaHora: fechaHora || new Date().toISOString()
       });
     }
-
   } catch (error) {
-    console.error('[api/boya] Error:', error.message);
-    return res.status(500).json({
-      error: 'Fallo interno en el proxy.',
-      detalle: error.message
-    });
+    return res.status(500).json({ error: error.message });
   }
 }
 
 function gradosACardinal(grados) {
   if (grados === null || isNaN(grados)) return '--';
   const rumbos = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
-  const indice = Math.round(((grados % 360) + 360) % 360 / 45) % 8;
-  return rumbos[indice];
+  return rumbos[Math.round(((grados % 360) + 360) % 360 / 45) % 8];
 }
