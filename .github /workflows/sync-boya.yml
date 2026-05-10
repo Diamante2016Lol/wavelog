@@ -3,7 +3,8 @@ name: Sync Boya Barcelona
 on:
   schedule:
     - cron: '0 * * * *'   # cada hora en punto (UTC)
-  workflow_dispatch:        # permite ejecutarlo manualmente desde GitHub
+  workflow_dispatch:     
+  # permite ejecutarlo manualmente desde GitHub
 
 jobs:
   sync:
