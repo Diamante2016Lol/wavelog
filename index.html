@@ -37,9 +37,9 @@
 
     .conditions-bar { background: var(--card); border: 1px solid var(--card-border); border-radius: 16px; padding: 13px 16px; margin-bottom: 18px; backdrop-filter: blur(14px); position: relative; overflow: hidden; }
     .conditions-label { font-family: 'JetBrains Mono', monospace; font-size: 0.63rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--teal); margin-bottom: 9px; }
-    .conditions-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .conditions-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
     .condition-item { text-align: center; }
-    .condition-value { font-family: 'JetBrains Mono', monospace; font-size: 1.45rem; font-weight: 600; color: #fff; line-height: 1; }
+    .condition-value { font-family: 'JetBrains Mono', monospace; font-size: 1.35rem; font-weight: 600; color: #fff; line-height: 1; }
     .condition-unit { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
     .condition-label { font-size: 0.58rem; color: var(--muted); margin-top: 1px; }
     .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; animation: dotPulse 2.2s ease-in-out infinite; }
@@ -79,6 +79,9 @@
     .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(80px); background: rgba(20,184,166,0.95); color: #fff; padding: 11px 22px; border-radius: 30px; font-size: 0.83rem; z-index: 9999; transition: transform 0.38s cubic-bezier(0.34,1.56,0.64,1); }
     .toast.show { transform: translateX(-50%) translateY(0); }
     .stars-filled { color: var(--gold); } .stars-empty { color: rgba(30,60,90,0.9); }
+
+    /* Estado de carga del boton Autorellenar */
+    .btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
   </style>
 </head>
 
@@ -92,9 +95,10 @@
       <div class="app-tagline">Diario de Surf Compartido</div>
     </header>
 
+    <!-- Widget de condiciones en tiempo real: Boya Barcelona via /api/boya -->
     <div class="conditions-bar">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span class="conditions-label">📡 Boya Barcelona (Open-Meteo)</span>
+        <span class="conditions-label">📡 Boya Barcelona (Puertos del Estado)</span>
         <button onclick="fetchPortusData()" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
       </div>
       <div id="conditions-content">
@@ -131,7 +135,8 @@
           </div>
         </div>
         
-        <button class="btn-secondary" onclick="fillFormFromBCN()">📡 Rellenar con datos de la Boya</button>
+        <!-- Boton Autorellenar: usa fecha y hora del formulario para buscar historico en la boya -->
+        <button class="btn-secondary" id="btn-autofill" onclick="fillFormFromBCN()">📡 Rellenar con datos de la Boya</button>
         
         <div class="form-grid-4">
           <div class="form-group"><label class="form-label">Hs (m)</label><input type="number" id="input-wave-height" class="form-input" step="0.1"></div>
@@ -174,14 +179,22 @@
   </div>
 
   <script>
-    const SUPABASE_URL = 'https://vpmpgxiwrquzbcahsnfs.supabase.co'; 
+    // -----------------------------------------------------------------------
+    // CONFIGURACION SUPABASE
+    // -----------------------------------------------------------------------
+    const SUPABASE_URL = 'https://vpmpgxiwrquzbcahsnfs.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwbXBneGl3cnF1emJjYWhzbmZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0MjM3MjgsImV4cCI6MjA5Mzk5OTcyOH0.GJH0k3dxtQ_xMHmCphAl1INRzraf20LbBv4LTOzXWNw';
-    
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+    // -----------------------------------------------------------------------
+    // ESTADO GLOBAL
+    // -----------------------------------------------------------------------
     let currentRating = 0;
-    let bcnConditions = null;
+    let bcnConditions = null; // Guarda los ultimos datos live de la boya
 
+    // -----------------------------------------------------------------------
+    // NAVEGACION POR TABS
+    // -----------------------------------------------------------------------
     function switchTab(tabId) {
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -190,58 +203,151 @@
       if (tabId === 'history') renderSessions();
     }
 
+    // -----------------------------------------------------------------------
+    // ESTRELLAS DE VALORACION
+    // -----------------------------------------------------------------------
     function setRating(v) {
       currentRating = v;
       document.querySelectorAll('#star-rating-log .star-btn').forEach((b, i) => b.classList.toggle('active', i < v));
     }
 
+    // -----------------------------------------------------------------------
+    // WIDGET SUPERIOR: datos en tiempo real via /api/boya (sin parametros)
+    // Llama al proxy de Vercel, que a su vez llama a Puertos del Estado
+    // -----------------------------------------------------------------------
     async function fetchPortusData() {
+      const contenedor = document.getElementById('conditions-content');
+      contenedor.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando con la boya...</div>';
+
       try {
-        const res = await fetch('https://marine-api.open-meteo.com/v1/marine?latitude=41.38&longitude=2.17&current=wave_height,wave_period,wave_direction');
-        const data = await res.json();
-        const c = data.current;
-        const dirs = ['N','NE','E','SE','S','SO','O','NO'];
-        const dir = dirs[Math.round(c.wave_direction / 45) % 8];
-        bcnConditions = { hs: c.wave_height, tp: c.wave_period, dir: dir };
-        
-        document.getElementById('conditions-content').innerHTML = `
+        // Llamada al proxy Vercel sin parametros = datos en tiempo real
+        const res = await fetch('/api/boya');
+        if (!res.ok) throw new Error('Respuesta no OK del proxy');
+        const datos = await res.json();
+
+        if (datos.error) throw new Error(datos.error);
+
+        // Guardamos en memoria para el boton de Autorellenar (fallback)
+        bcnConditions = datos;
+
+        // Formateamos la hora del ultimo dato
+        let horaStr = '--:--';
+        if (datos.fechaHora) {
+          try {
+            const dt = new Date(datos.fechaHora);
+            horaStr = dt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+          } catch(e) { horaStr = '--:--'; }
+        }
+
+        contenedor.innerHTML = `
           <div class="conditions-grid">
-            <div class="condition-item"><div class="condition-value">${c.wave_height}</div><div class="condition-label">Hs (m)</div></div>
-            <div class="condition-item"><div class="condition-value">${c.wave_period}</div><div class="condition-label">Tp (s)</div></div>
-            <div class="condition-item"><div class="condition-value">${dir}</div><div class="condition-label">Dir</div></div>
+            <div class="condition-item">
+              <div class="condition-value">${datos.hs !== null ? datos.hs : '--'}</div>
+              <div class="condition-label">Hs (m)</div>
+            </div>
+            <div class="condition-item">
+              <div class="condition-value">${datos.hmax !== null ? datos.hmax : '--'}</div>
+              <div class="condition-label">Hmax (m)</div>
+            </div>
+            <div class="condition-item">
+              <div class="condition-value">${datos.tp !== null ? datos.tp : '--'}</div>
+              <div class="condition-label">Tp (s)</div>
+            </div>
+            <div class="condition-item">
+              <div class="condition-value">${datos.dir || '--'}</div>
+              <div class="condition-label">Dir</div>
+            </div>
+          </div>
+          <div style="margin-top:7px; display:flex; align-items:center; gap:5px;">
+            <span class="status-dot live"></span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">Portus · Boya 12 · ${horaStr}</span>
           </div>`;
-      } catch (e) {
-        document.getElementById('conditions-content').innerHTML = '<div class="text-xs text-red-400">Error al cargar datos</div>';
+
+      } catch (err) {
+        console.warn('[fetchPortusData] Error con /api/boya:', err.message);
+        // Si el proxy falla, informamos al usuario con un mensaje claro
+        contenedor.innerHTML = `
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="status-dot mock"></span>
+            <span style="font-size:0.7rem; color:var(--gold);">Sin datos de la boya. Revisa el deploy del proxy.</span>
+          </div>`;
+        bcnConditions = null;
       }
     }
 
-    function fillFormFromBCN() {
-      if (!bcnConditions) return;
-      document.getElementById('input-wave-height').value = bcnConditions.hs;
-      document.getElementById('input-wave-max').value = (bcnConditions.hs * 1.5).toFixed(1);
-      document.getElementById('input-period').value = bcnConditions.tp;
-      document.getElementById('input-sea-dir').value = bcnConditions.dir;
+    // -----------------------------------------------------------------------
+    // BOTON AUTORELLENAR: busca datos historicos para la fecha y hora del formulario
+    // Llama a /api/boya?fecha=YYYY-MM-DD&hora=HH:MM
+    // -----------------------------------------------------------------------
+    async function fillFormFromBCN() {
+      const fecha = document.getElementById('input-date').value;
+      const hora  = document.getElementById('input-time').value;
+      const btn   = document.getElementById('btn-autofill');
+
+      if (!fecha || !hora) {
+        showToast('Selecciona fecha y hora primero', true);
+        return;
+      }
+
+      // Feedback visual mientras carga
+      btn.disabled = true;
+      btn.textContent = '⏳ Buscando datos...';
+
+      try {
+        // Llamamos al proxy con parametros de fecha y hora para historico
+        const url = '/api/boya?fecha=' + encodeURIComponent(fecha) + '&hora=' + encodeURIComponent(hora);
+        const res = await fetch(url);
+        const datos = await res.json();
+
+        if (!res.ok || datos.error) {
+          throw new Error(datos.error || 'Error del servidor');
+        }
+
+        // Rellenamos los campos del formulario con los datos de la boya
+        if (datos.hs !== null)   document.getElementById('input-wave-height').value = datos.hs;
+        if (datos.hmax !== null) document.getElementById('input-wave-max').value    = datos.hmax;
+        if (datos.tp !== null)   document.getElementById('input-period').value      = datos.tp;
+        if (datos.dir)           document.getElementById('input-sea-dir').value     = datos.dir;
+
+        // Mensaje informativo con la diferencia horaria encontrada
+        const diffMsg = datos.diferenciaMinutos <= 30
+          ? 'Datos exactos de la boya 📡'
+          : 'Datos mas cercanos disponibles (' + datos.diferenciaMinutos + ' min de diferencia)';
+
+        showToast(diffMsg);
+
+      } catch (err) {
+        console.error('[fillFormFromBCN] Error:', err.message);
+        showToast('No se encontraron datos para esa fecha y hora', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📡 Rellenar con datos de la Boya';
+      }
     }
 
+    // -----------------------------------------------------------------------
+    // GUARDAR SESION EN SUPABASE
+    // -----------------------------------------------------------------------
     async function submitSession() {
       const surferName = document.getElementById('input-surfer').value.trim() || 'Anónimo';
       
       const session = {
-        spot: document.getElementById('input-spot').value,
+        spot:        document.getElementById('input-spot').value,
         surfer_name: surferName,
-        datetime: document.getElementById('input-date').value + 'T' + document.getElementById('input-time').value,
-        rating: currentRating,
-        waveHeight: parseFloat(document.getElementById('input-wave-height').value),
-        waveMax: parseFloat(document.getElementById('input-wave-max').value) || null,
-        period: parseFloat(document.getElementById('input-period').value),
-        seaDir: document.getElementById('input-sea-dir').value,
-        windDir: document.getElementById('input-wind-dir').value,
-        windForce: parseFloat(document.getElementById('input-wind-force').value) || null,
-        notes: document.getElementById('input-notes').value
+        datetime:    document.getElementById('input-date').value + 'T' + document.getElementById('input-time').value,
+        rating:      currentRating,
+        waveHeight:  parseFloat(document.getElementById('input-wave-height').value),
+        waveMax:     parseFloat(document.getElementById('input-wave-max').value) || null,
+        period:      parseFloat(document.getElementById('input-period').value),
+        seaDir:      document.getElementById('input-sea-dir').value,
+        windDir:     document.getElementById('input-wind-dir').value,
+        windForce:   parseFloat(document.getElementById('input-wind-force').value) || null,
+        notes:       document.getElementById('input-notes').value
       };
 
       if (!session.spot || !currentRating) return showToast('Falta spot o puntuación', true);
 
+      // Guardamos el nombre en localStorage para la proxima sesion
       localStorage.setItem('wavelog_username', surferName);
 
       const { error } = await supabaseClient.from('sessions').insert([session]);
@@ -250,14 +356,17 @@
         console.error(error);
       } else {
         showToast('¡Guardado en el grupo! 🤙');
-        document.getElementById('input-spot').value = '';
-        document.getElementById('input-notes').value = '';
-        document.getElementById('input-wind-dir').value = '';
+        document.getElementById('input-spot').value      = '';
+        document.getElementById('input-notes').value     = '';
+        document.getElementById('input-wind-dir').value  = '';
         document.getElementById('input-wind-force').value = '';
         setRating(0);
       }
     }
 
+    // -----------------------------------------------------------------------
+    // HISTORIAL DEL GRUPO
+    // -----------------------------------------------------------------------
     async function renderSessions() {
       const container = document.getElementById('sessions-list');
       container.innerHTML = '<p class="text-xs text-slate-500">Cargando...</p>';
@@ -268,28 +377,26 @@
       if (data.length === 0) return container.innerHTML = '<p class="text-xs text-slate-500">Aún no hay baños registrados.</p>';
 
       container.innerHTML = data.map(s => {
-        const name = s.surfer_name || 'Anónimo';
-        const windTag = s.windDir ? `<span class="condition-tag">💨 ${s.windDir} ${s.windForce ? s.windForce + 'kt' : ''}</span>` : '';
-        const hmaxTag = s.waveMax ? `<span class="condition-tag">🌊 Hmax ${s.waveMax}m</span>` : '';
+        const name    = s.surfer_name || 'Anónimo';
+        const windTag = s.windDir ? '<span class="condition-tag">💨 ' + s.windDir + (s.windForce ? ' ' + s.windForce + 'kt' : '') + '</span>' : '';
+        const hmaxTag = s.waveMax ? '<span class="condition-tag">🌊 Hmax ' + s.waveMax + 'm</span>' : '';
         
-        return `
-          <div class="session-card">
-            <button class="delete-btn" onclick="deleteSession('${s.id}')">✕</button>
-            <div class="flex justify-between items-start mb-1">
-              <div class="session-spot">${s.spot} <span class="session-surfer">por ${name}</span></div>
-              <div class="text-amber-400 text-xs">${'★'.repeat(s.rating)}</div>
-            </div>
-            <div class="session-date">${new Date(s.datetime).toLocaleDateString()}</div>
-            <div>
-              <span class="condition-tag">🌊 Hs ${s.waveHeight}m</span>
-              ${hmaxTag}
-              <span class="condition-tag">⏱ ${s.period}s</span>
-              <span class="condition-tag">🧭 ${s.seaDir}</span>
-              ${windTag}
-            </div>
-            ${s.notes ? `<p class="text-[10px] text-slate-400 mt-2 italic">"${s.notes}"</p>` : ''}
-          </div>
-        `;
+        return '<div class="session-card">' +
+          '<button class="delete-btn" onclick="deleteSession(\'' + s.id + '\')">✕</button>' +
+          '<div class="flex justify-between items-start mb-1">' +
+            '<div class="session-spot">' + s.spot + ' <span class="session-surfer">por ' + name + '</span></div>' +
+            '<div class="text-amber-400 text-xs">' + '★'.repeat(s.rating) + '</div>' +
+          '</div>' +
+          '<div class="session-date">' + new Date(s.datetime).toLocaleDateString('es-ES') + '</div>' +
+          '<div>' +
+            '<span class="condition-tag">🌊 Hs ' + s.waveHeight + 'm</span>' +
+            hmaxTag +
+            '<span class="condition-tag">⏱ ' + s.period + 's</span>' +
+            '<span class="condition-tag">🧭 ' + s.seaDir + '</span>' +
+            windTag +
+          '</div>' +
+          (s.notes ? '<p class="text-[10px] text-slate-400 mt-2 italic">"' + s.notes + '"</p>' : '') +
+        '</div>';
       }).join('');
     }
 
@@ -299,24 +406,30 @@
       renderSessions();
     }
 
+    // -----------------------------------------------------------------------
+    // EL ORACULO
+    // -----------------------------------------------------------------------
     async function runOracle() {
       const h = parseFloat(document.getElementById('oracle-wave-height').value);
       const { data } = await supabaseClient.from('sessions').select('*');
       if (!data || data.length === 0) return;
 
-      const best = data.filter(s => Math.abs(s.waveHeight - h) < 0.4).sort((a,b) => b.rating - a.rating)[0];
+      const best = data.filter(s => Math.abs(s.waveHeight - h) < 0.4).sort((a, b) => b.rating - a.rating)[0];
       const res = document.getElementById('oracle-result');
       if (best) {
-        res.innerHTML = `<div class="p-4 bg-purple-900/30 border border-purple-500/50 rounded-xl">
-          <p class="text-[10px] uppercase tracking-widest text-purple-400 mb-1">Recomendación</p>
-          <p class="font-bold text-white text-lg">${best.spot}</p>
-          <p class="text-xs text-slate-400">Baño de ${best.surfer_name || 'Anónimo'} (${best.rating} estrellas)</p>
-        </div>`;
+        res.innerHTML = '<div class="p-4 bg-purple-900/30 border border-purple-500/50 rounded-xl">' +
+          '<p class="text-[10px] uppercase tracking-widest text-purple-400 mb-1">Recomendación</p>' +
+          '<p class="font-bold text-white text-lg">' + best.spot + '</p>' +
+          '<p class="text-xs text-slate-400">Baño de ' + (best.surfer_name || 'Anónimo') + ' (' + best.rating + ' estrellas)</p>' +
+        '</div>';
       } else {
         res.innerHTML = '<p class="text-xs text-slate-500">No hay datos suficientes para estas condiciones.</p>';
       }
     }
 
+    // -----------------------------------------------------------------------
+    // UTILIDADES
+    // -----------------------------------------------------------------------
     function showToast(msg, isError) {
       const t = document.getElementById('toast');
       t.textContent = msg;
@@ -325,11 +438,17 @@
       setTimeout(() => t.classList.remove('show'), 3000);
     }
 
-    // Inicialización al cargar la web
+    // -----------------------------------------------------------------------
+    // INICIALIZACION AL CARGAR LA WEB
+    // -----------------------------------------------------------------------
     const savedName = localStorage.getItem('wavelog_username');
     if (savedName) document.getElementById('input-surfer').value = savedName;
+
+    // Fecha y hora actual como valores por defecto del formulario
     document.getElementById('input-date').value = new Date().toISOString().split('T')[0];
-    document.getElementById('input-time').value = new Date().toTimeString().slice(0,5);
+    document.getElementById('input-time').value = new Date().toTimeString().slice(0, 5);
+
+    // Cargamos datos en tiempo real del widget superior
     fetchPortusData();
   </script>
 </body>
