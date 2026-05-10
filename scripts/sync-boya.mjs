@@ -129,8 +129,7 @@ async function obtenerRegistros() {
   try {
     const resp = await fetch(url, {
       method:  'POST',
-      headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/json' },
-      body:    '{}',
+      headers: { ...BROWSER_HEADERS },
     });
 
     if (resp.ok) {
