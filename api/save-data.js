@@ -1,8 +1,6 @@
-// api/save-data.js — WaveLog · Sync horario Boya 1731 → Supabase
+// api/save-data.js — WaveLog · Sync horario Boya 1731 → Supabase (SIN LIBRERÍAS)
 // Llamado por cron-job.org una vez por hora
 // ES Modules — compatible con Vercel Serverless Functions
-
-import { createClient } from '@supabase/supabase-js';
 
 // =============================================================================
 //  CONFIGURACIÓN
@@ -27,7 +25,6 @@ const BROWSER_HEADERS = {
   'User-Agent':      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
 };
 
-
 // =============================================================================
 //  HANDLER PRINCIPAL
 // =============================================================================
@@ -35,23 +32,18 @@ export default async function handler(req, res) {
 
   // Solo aceptamos GET (que es lo que envía cron-job.org) y OPTIONS
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Método no permitido' });
-  }
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Método no permitido' });
 
   // Comprobación de variables de entorno antes de hacer nada
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
-    console.error('[save-data] Faltan variables de entorno de Supabase');
     return res.status(500).json({
-      ok:      false,
-      error:   'Configuración incompleta: SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no definidas',
+      ok: false,
+      error: 'Configuración incompleta: SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY no definidas',
     });
   }
-
-  const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
     // -----------------------------------------------------------------------
@@ -78,19 +70,14 @@ export default async function handler(req, res) {
       }
     }
 
-    if (!registroValido || !oleaje) {
-      throw new Error('No se encontró ningún registro reciente con datos de Hs');
-    }
+    if (!registroValido || !oleaje) throw new Error('No se encontró registro reciente con Hs');
 
     // -----------------------------------------------------------------------
     //  PASO 2: Construir el registro a insertar
     // -----------------------------------------------------------------------
-    // Convertir la fecha del gobierno a ISO 8601 con zona UTC
     const fechaIso = convertirFechaAIso(registroValido.fecha);
 
-    if (!fechaIso) {
-      throw new Error(`Fecha con formato inválido: ${registroValido.fecha}`);
-    }
+    if (!fechaIso) throw new Error(`Fecha con formato inválido: ${registroValido.fecha}`);
 
     const nuevoRegistro = {
       fecha_oficial: fechaIso,
@@ -102,20 +89,27 @@ export default async function handler(req, res) {
     };
 
     // -----------------------------------------------------------------------
-    //  PASO 3: Insertar en Supabase evitando duplicados
-    //  onConflict: 'fecha_oficial' aprovecha la restricción UNIQUE de la tabla.
-    //  ignoreDuplicates: true hace que no lance error si ya existe.
+    //  PASO 3: Insertar en Supabase SIN librerías (Usando fetch nativo)
     // -----------------------------------------------------------------------
-    const { data: insertado, error: errorInsert } = await supabase
-      .from(TABLE_NAME)
-      .insert(nuevoRegistro, { onConflict: 'fecha_oficial', ignoreDuplicates: true })
-      .select();
+    const tablaUrl = `${supabaseUrl}/rest/v1/${TABLE_NAME}`;
 
-    if (errorInsert) {
-      throw new Error(`Error de Supabase al insertar: ${errorInsert.message}`);
+    const supabaseResp = await fetch(tablaUrl, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=ignore-duplicates, return=representation'
+      },
+      body: JSON.stringify(nuevoRegistro)
+    });
+
+    if (!supabaseResp.ok) {
+        const errorText = await supabaseResp.text();
+        throw new Error(`Error de Supabase: ${errorText}`);
     }
 
-    // Si insertado está vacío significa que el registro ya existía (duplicado ignorado)
+    const insertado = await supabaseResp.json();
     const esDuplicado = !insertado || insertado.length === 0;
 
     return res.status(200).json({
@@ -128,22 +122,16 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    console.error('[save-data] ERROR:', err.message);
-    return res.status(500).json({
-      ok:      false,
-      error:   err.message,
-    });
+    return res.status(500).json({ ok: false, error: err.message });
   }
 }
 
-
 // =============================================================================
-//  OBTENCIÓN DE DATOS — POST primero, GET como fallback
+//  FUNCIONES DE APOYO (Idénticas a tu proxy de boya)
 // =============================================================================
 async function obtenerRegistros() {
   const url = `${STATION_URL}&_ts=${Date.now()}`;
 
-  // Intento 1: POST con body vacío
   try {
     const resp = await fetch(url, {
       method:  'POST',
@@ -151,113 +139,56 @@ async function obtenerRegistros() {
       body:    '{}',
       cache:   'no-store',
     });
+    if (resp.ok) return normalizar(await resp.json());
+  } catch (err) { /* Silenciamos el error para probar GET */ }
 
-    if (resp.ok) {
-      const data = await resp.json();
-      return normalizar(data);
-    }
-
-    // Si POST falla con 405 o 403, intentamos GET
-    console.warn(`[save-data] POST devolvió ${resp.status}, intentando GET…`);
-
-  } catch (errPost) {
-    console.warn('[save-data] POST lanzó excepción, intentando GET:', errPost.message);
-  }
-
-  // Intento 2: GET estándar
-  const resp = await fetch(url, {
-    method:  'GET',
-    headers: BROWSER_HEADERS,
-    cache:   'no-store',
-  });
-
-  if (!resp.ok) {
-    throw new Error(`Tanto POST como GET fallaron. Último estado: ${resp.status}`);
-  }
-
-  const data = await resp.json();
-  return normalizar(data);
+  const resp = await fetch(url, { method: 'GET', headers: BROWSER_HEADERS, cache: 'no-store' });
+  if (!resp.ok) throw new Error(`Ambos métodos fallaron. Estado GET: ${resp.status}`);
+  return normalizar(await resp.json());
 }
 
 function normalizar(data) {
-  if (Array.isArray(data))              return data;
+  if (Array.isArray(data)) return data;
   if (data && typeof data === 'object') return [data];
   return [];
 }
 
-
-// =============================================================================
-//  PARSING DE FECHAS
-//  Formato del gobierno: "2026-05-10 18:00:00.0" (UTC implícito)
-// =============================================================================
 function parseFecha(str) {
   if (!str) return 0;
-  const iso = str.trim().replace(' ', 'T').replace(/\.0+$/, '') + 'Z';
-  const t   = new Date(iso).getTime();
-  return isNaN(t) ? 0 : t;
+  return new Date(str.trim().replace(' ', 'T').replace(/\.0+$/, '') + 'Z').getTime() || 0;
 }
 
 function convertirFechaAIso(str) {
   if (!str) return null;
-  const iso = str.trim().replace(' ', 'T').replace(/\.0+$/, '') + 'Z';
-  const d   = new Date(iso);
+  const d = new Date(str.trim().replace(' ', 'T').replace(/\.0+$/, '') + 'Z');
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-
-// =============================================================================
-//  EXTRACCIÓN DE OLEAJE — búsqueda por paramId (resistente a cambios de nombre)
-// =============================================================================
 function extraerOleaje(registro) {
   const resultado = { hs: null, hmax: null, tp: null, dir: null };
-
-  const datos = registro.datos
-    ?? registro.measurements
-    ?? registro.data
-    ?? (Array.isArray(registro) ? registro : []);
+  const datos = registro.datos ?? registro.measurements ?? registro.data ?? (Array.isArray(registro) ? registro : []);
 
   for (const d of datos) {
-    const id    = String(d.paramId ?? d.idVariable ?? d.id ?? '').trim();
-    const valor = parseValor(d.valor ?? d.value ?? d.v ?? d.dato);
+    const id = String(d.paramId ?? d.idVariable ?? d.id ?? '').trim();
+    const valor = parseFloat(String(d.valor ?? d.value ?? d.v ?? d.dato).replace(',', '.'));
+    if (isNaN(valor)) continue;
 
-    if (valor === null) continue;
-
-    if      (PARAM_HS.includes(id))   resultado.hs   = valor;
+    if (PARAM_HS.includes(id)) resultado.hs = valor;
     else if (PARAM_HMAX.includes(id)) resultado.hmax = valor;
-    else if (PARAM_TP.includes(id))   resultado.tp   = valor;
-    else if (PARAM_DIR.includes(id))  resultado.dir  = valor;
+    else if (PARAM_TP.includes(id)) resultado.tp = valor;
+    else if (PARAM_DIR.includes(id)) resultado.dir = valor;
   }
-
   return resultado;
 }
 
-function parseValor(raw) {
-  if (raw === undefined || raw === null || raw === '') return null;
-  const n = parseFloat(String(raw).replace(',', '.'));
-  return isNaN(n) ? null : n;
-}
-
-
-// =============================================================================
-//  CONVERSIÓN A CARDINAL — sin operador de módulo
-// =============================================================================
 function gradosACardinal(grados) {
-  if (grados === null || grados === undefined || isNaN(grados)) return '--';
-
-  const RUMBOS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
-
-  const normalizado = grados - Math.floor(grados / 360) * 360;
-  const positivo    = normalizado < 0 ? normalizado + 360 : normalizado;
-  const idxRaw      = Math.round(positivo / 45);
-  const idx         = idxRaw - Math.floor(idxRaw / 8) * 8;
-
-  return RUMBOS[idx];
+  if (grados === null || isNaN(grados)) return '--';
+  const rumbos = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+  let normalizado = grados - Math.floor(grados / 360) * 360;
+  if (normalizado < 0) normalizado += 360;
+  return rumbos[(Math.round(normalizado / 45) - Math.floor(Math.round(normalizado / 45) / 8) * 8)];
 }
 
-
-// =============================================================================
-//  UTILIDADES
-// =============================================================================
 function redondear(n, decimales) {
   const factor = Math.pow(10, decimales);
   return Math.round(n * factor) / factor;
