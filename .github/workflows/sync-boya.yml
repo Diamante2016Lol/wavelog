@@ -20,21 +20,10 @@ jobs:
       - name: Instalar dependencias
         run: |
           echo '{"name":"wavelog","version":"1.0.0","type":"module"}' > package.json
-          npm install @supabase/supabase-js
-          
-      - name: Verificar archivos
-        run: |
-          echo "=== Raiz ==="
-          ls -la
-          echo "=== Scripts ==="
-          ls -la scripts/ || echo "Carpeta scripts NO existe"
-          
+          npm install @supabase/supabase-js ws
+
       - name: Ejecutar sync de la boya
         run: node scripts/sync-boya.mjs
         env:
           SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      - name: Instalar dependencias
-        run: |
-          echo '{"name":"wavelog","version":"1.0.0","type":"module"}' > package.json
-          npm install @supabase/supabase-js ws
