@@ -145,7 +145,7 @@
 
         <div class="form-grid-2">
           <div class="form-group"><label class="form-label">Dir. Viento</label><select id="input-wind-dir" class="form-input"><option value="">-</option><option>N</option><option>NE</option><option>E</option><option>SE</option><option>S</option><option>SO</option><option>O</option><option>NO</option></select></div>
-          <div class="form-group"><label class="form-label">Fuerza Viento (kt)</label><input type="text" id="input-wind-force" class="form-input" placeholder="Ej: 10"></div>
+          <div class="form-group"><label class="form-label">Fuerza Viento (kt)</label><input type="text" id="input-wind-force" class="form-input" placeholder="Ej: 6-9 o Fuerte"></div>
         </div>
 
         <div class="form-group"><label class="form-label">Notas</label><textarea id="input-notes" class="form-input" placeholder="¿Había mucha gente?"></textarea></div>
@@ -384,7 +384,8 @@
         period:      parseFloat(document.getElementById('input-period').value),
         seaDir:      document.getElementById('input-sea-dir').value,
         windDir:     document.getElementById('input-wind-dir').value,
-        windForce:   parseFloat(document.getElementById('input-wind-force').value) || null,
+        // ¡El cambio está aquí! Ya no forzamos un número, cogemos el texto tal cual.
+        windForce:   document.getElementById('input-wind-force').value.trim() || null,
         notes:       document.getElementById('input-notes').value
       };
 
@@ -395,6 +396,7 @@
       const { error } = await supabaseClient.from('sessions').insert([session]);
       if (error) {
         showToast('Error al guardar', true);
+        console.error(error);
       } else {
         showToast('¡Guardado en el grupo! 🤙');
         document.getElementById('input-spot').value      = '';
@@ -419,6 +421,7 @@
 
       container.innerHTML = data.map(s => {
         const name    = s.surfer_name || 'Anónimo';
+        // Se renderizará "💨 N 6-9kt" o "💨 SE Fuertekt"
         const windTag = s.windDir ? '<span class="condition-tag">💨 ' + s.windDir + (s.windForce ? ' ' + s.windForce + 'kt' : '') + '</span>' : '';
         const hmaxTag = s.waveMax ? '<span class="condition-tag">🌊 Hmax ' + s.waveMax + 'm</span>' : '';
         
