@@ -11,10 +11,11 @@ import ws from 'ws';
 const STATION_URL = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
 const TABLE_NAME  = 'boya_barcelona';
 
-const PARAM_HS   = ['1', '32'];
-const PARAM_HMAX = ['2', '33'];
+// IDs actualizados con la ingeniería inversa (13=Hs, 17=Hmax, 34=Tp, 20=Dir)
+const PARAM_HS   = ['1', '32', '13'];
+const PARAM_HMAX = ['2', '33', '17'];
 const PARAM_TP   = ['4', '34'];
-const PARAM_DIR  = ['6', '36'];
+const PARAM_DIR  = ['6', '36', '20'];
 
 const BROWSER_HEADERS = {
   'Accept':          'application/json, text/plain, */*',
@@ -25,7 +26,6 @@ const BROWSER_HEADERS = {
   'Referer':         'https://portus.puertos.es/',
   'User-Agent':      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
 };
-
 
 // =============================================================================
 //  ENTRADA PRINCIPAL
@@ -95,9 +95,9 @@ async function main() {
     fecha_oficial: fechaIso,
     hs:            redondear(oleaje.hs, 2),
     hmax:          oleaje.hmax !== null ? redondear(oleaje.hmax, 2) : redondear(oleaje.hs * 1.55, 2),
-    tp:            oleaje.tp   !== null ? redondear(oleaje.tp,  1) : null,
+    tp:            oleaje.tp  !== null ? redondear(oleaje.tp,  1) : null,
     dir:           gradosACardinal(oleaje.dir),
-    dir_grados:    oleaje.dir  !== null ? Math.round(oleaje.dir)   : null,
+    dir_grados:    oleaje.dir !== null ? Math.round(oleaje.dir)   : null,
   };
 
   const { data: insertado, error: errorInsert } = await supabase
@@ -119,9 +119,8 @@ async function main() {
   }
 }
 
-
 // =============================================================================
-//  OBTENCIÓN DE DATOS — POST primero, GET como fallback
+//  OBTENCIÓN DE DATOS — POST MAESTRO
 // =============================================================================
 async function obtenerRegistros() {
   const url = `${STATION_URL}&_ts=${Date.now()}`;
@@ -129,7 +128,10 @@ async function obtenerRegistros() {
   try {
     const resp = await fetch(url, {
       method:  'POST',
-      headers: { ...BROWSER_HEADERS },
+      // ¡CLAVE! Añadimos Content-Type application/json para que entienda el body
+      headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/json' },
+      // ¡CLAVE! El array mágico que has descubierto
+      body:    JSON.stringify([20, 34, 32, 17, 13]), 
     });
 
     if (resp.ok) {
@@ -159,7 +161,6 @@ function normalizar(data) {
   return [];
 }
 
-
 // =============================================================================
 //  PARSING DE FECHAS
 // =============================================================================
@@ -177,9 +178,8 @@ function convertirFechaAIso(str) {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-
 // =============================================================================
-//  EXTRACCION DE OLEAJE — por paramId
+//  EXTRACCIÓN DE OLEAJE — APLICANDO EL FACTOR
 // =============================================================================
 function extraerOleaje(registro) {
   const resultado = { hs: null, hmax: null, tp: null, dir: null };
@@ -190,15 +190,21 @@ function extraerOleaje(registro) {
     ?? (Array.isArray(registro) ? registro : []);
 
   for (const d of datos) {
-    const id    = String(d.paramId ?? d.idVariable ?? d.id ?? '').trim();
-    const valor = parseValor(d.valor ?? d.value ?? d.v ?? d.dato);
+    const id = String(d.paramId ?? d.idVariable ?? d.id ?? '').trim();
+    
+    const valorBruto = parseValor(d.valor ?? d.value ?? d.v ?? d.dato);
+    // ¡CLAVE! Sacamos el factor. Si no viene en el JSON, usamos 1 para que no se rompa la división.
+    const factor = parseValor(d.factor) || 1;
 
-    if (valor === null) continue;
+    if (valorBruto === null) continue;
 
-    if      (PARAM_HS.includes(id))   resultado.hs   = valor;
-    else if (PARAM_HMAX.includes(id)) resultado.hmax = valor;
-    else if (PARAM_TP.includes(id))   resultado.tp   = valor;
-    else if (PARAM_DIR.includes(id))  resultado.dir  = valor;
+    // Aplicamos la división descubierta
+    const valorReal = valorBruto / factor;
+
+    if      (PARAM_HS.includes(id))   resultado.hs   = valorReal;
+    else if (PARAM_HMAX.includes(id)) resultado.hmax = valorReal;
+    else if (PARAM_TP.includes(id))   resultado.tp   = valorReal;
+    else if (PARAM_DIR.includes(id))  resultado.dir  = valorReal;
   }
 
   return resultado;
@@ -210,9 +216,8 @@ function parseValor(raw) {
   return isNaN(n) ? null : n;
 }
 
-
 // =============================================================================
-//  CONVERSION A CARDINAL — sin operador de modulo
+//  CONVERSIÓN A CARDINAL — sin operador de modulo
 // =============================================================================
 function gradosACardinal(grados) {
   if (grados === null || grados === undefined || isNaN(grados)) return '--';
@@ -231,7 +236,6 @@ function redondear(n, decimales) {
   const factor = Math.pow(10, decimales);
   return Math.round(n * factor) / factor;
 }
-
 
 // =============================================================================
 //  ARRANQUE
