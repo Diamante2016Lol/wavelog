@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <script>
     tailwind.config = {
@@ -78,9 +79,7 @@
 
     .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(80px); background: rgba(20,184,166,0.95); color: #fff; padding: 11px 22px; border-radius: 30px; font-size: 0.83rem; z-index: 9999; transition: transform 0.38s cubic-bezier(0.34,1.56,0.64,1); }
     .toast.show { transform: translateX(-50%) translateY(0); }
-    .stars-filled { color: var(--gold); } .stars-empty { color: rgba(30,60,90,0.9); }
 
-    /* Estado de carga del boton Autorellenar */
     .btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
   </style>
 </head>
@@ -95,14 +94,13 @@
       <div class="app-tagline">Diario de Surf Compartido</div>
     </header>
 
-    <!-- Widget de condiciones en tiempo real: Boya Barcelona via /api/boya -->
     <div class="conditions-bar">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span class="conditions-label">📡 Boya Barcelona (Puertos del Estado)</span>
+        <span class="conditions-label">📡 Boya Barcelona (Supabase)</span>
         <button onclick="fetchPortusData()" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
       </div>
       <div id="conditions-content">
-        <div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando...</div>
+        <div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Cargando datos...</div>
       </div>
     </div>
 
@@ -110,6 +108,7 @@
       <button class="tab-btn active" onclick="switchTab('log')" id="tab-log"><span>📝</span><span>Registrar</span></button>
       <button class="tab-btn" onclick="switchTab('history')" id="tab-history"><span>🏄</span><span>Grupo</span></button>
       <button class="tab-btn" onclick="switchTab('oracle')" id="tab-oracle"><span>🔮</span><span>Oráculo</span></button>
+      <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats"><span>📊</span><span>Gráfica</span></button>
     </nav>
 
     <section id="panel-log" class="panel active">
@@ -135,8 +134,7 @@
           </div>
         </div>
         
-        <!-- Boton Autorellenar: usa fecha y hora del formulario para buscar historico en la boya -->
-        <button class="btn-secondary" id="btn-autofill" onclick="fillFormFromBCN()">📡 Rellenar con datos de la Boya</button>
+        <button class="btn-secondary" id="btn-autofill" onclick="fillFormFromBCN()">📡 Rellenar con historial de Supabase</button>
         
         <div class="form-grid-4">
           <div class="form-group"><label class="form-label">Hs (m)</label><input type="number" id="input-wave-height" class="form-input" step="0.1"></div>
@@ -176,6 +174,16 @@
         <div id="oracle-result" class="mt-4"></div>
       </div>
     </section>
+
+    <section id="panel-stats" class="panel">
+      <div class="glass-card">
+        <div class="section-title">📊 Estadísticas (Días de Surf)</div>
+        <p class="text-xs text-slate-500 mb-4">Altura (Hs) vs Periodo (Tp). Burbujas más grandes = más baños registrados.</p>
+        <div style="position: relative; height: 280px; width: 100%;">
+          <canvas id="surfChart"></canvas>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script>
@@ -186,11 +194,8 @@
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwbXBneGl3cnF1emJjYWhzbmZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0MjM3MjgsImV4cCI6MjA5Mzk5OTcyOH0.GJH0k3dxtQ_xMHmCphAl1INRzraf20LbBv4LTOzXWNw';
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    // -----------------------------------------------------------------------
-    // ESTADO GLOBAL
-    // -----------------------------------------------------------------------
     let currentRating = 0;
-    let bcnConditions = null; // Guarda los ultimos datos live de la boya
+    let surfChartInstance = null;
 
     // -----------------------------------------------------------------------
     // NAVEGACION POR TABS
@@ -201,42 +206,35 @@
       document.getElementById('panel-' + tabId).classList.add('active');
       document.getElementById('tab-' + tabId).classList.add('active');
       if (tabId === 'history') renderSessions();
+      if (tabId === 'stats') renderChart();
     }
 
-    // -----------------------------------------------------------------------
-    // ESTRELLAS DE VALORACION
-    // -----------------------------------------------------------------------
     function setRating(v) {
       currentRating = v;
       document.querySelectorAll('#star-rating-log .star-btn').forEach((b, i) => b.classList.toggle('active', i < v));
     }
 
     // -----------------------------------------------------------------------
-    // WIDGET SUPERIOR: datos en tiempo real via /api/boya (sin parametros)
-    // Llama al proxy de Vercel, que a su vez llama a Puertos del Estado
+    // WIDGET SUPERIOR: Consulta DIRECTA a Supabase (último registro)
     // -----------------------------------------------------------------------
     async function fetchPortusData() {
       const contenedor = document.getElementById('conditions-content');
-      contenedor.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando con la boya...</div>';
+      contenedor.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando con Supabase...</div>';
 
       try {
-        // Llamada al proxy Vercel sin parametros = datos en tiempo real
-        const res = await fetch('/api/boya');
-        if (!res.ok) throw new Error('Respuesta no OK del proxy');
-        const datos = await res.json();
+        const { data, error } = await supabaseClient
+          .from('boya_barcelona')
+          .select('*')
+          .order('fecha_oficial', { ascending: false })
+          .limit(1);
 
-        if (datos.error) throw new Error(datos.error);
+        if (error || !data || data.length === 0) throw new Error('No hay datos en la tabla boya_barcelona');
+        const datos = data[0];
 
-        // Guardamos en memoria para el boton de Autorellenar (fallback)
-        bcnConditions = datos;
-
-        // Formateamos la hora del ultimo dato
         let horaStr = '--:--';
-        if (datos.fechaHora) {
-          try {
-            const dt = new Date(datos.fechaHora);
-            horaStr = dt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-          } catch(e) { horaStr = '--:--'; }
+        if (datos.fecha_oficial) {
+          const dt = new Date(datos.fecha_oficial);
+          horaStr = dt.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
         }
 
         contenedor.innerHTML = `
@@ -260,69 +258,114 @@
           </div>
           <div style="margin-top:7px; display:flex; align-items:center; gap:5px;">
             <span class="status-dot live"></span>
-            <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">Portus · Boya 12 · ${horaStr}</span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">Sincronizado via GitHub · ${horaStr}</span>
           </div>`;
 
       } catch (err) {
-        console.warn('[fetchPortusData] Error con /api/boya:', err.message);
-        // Si el proxy falla, informamos al usuario con un mensaje claro
         contenedor.innerHTML = `
           <div style="display:flex; align-items:center; gap:6px;">
             <span class="status-dot mock"></span>
-            <span style="font-size:0.7rem; color:var(--gold);">Sin datos de la boya. Revisa el deploy del proxy.</span>
+            <span style="font-size:0.7rem; color:var(--gold);">Esperando primer dato del robot de GitHub...</span>
           </div>`;
-        bcnConditions = null;
       }
     }
 
     // -----------------------------------------------------------------------
-    // BOTON AUTORELLENAR: busca datos historicos para la fecha y hora del formulario
-    // Llama a /api/boya?fecha=YYYY-MM-DD&hora=HH:MM
+    // BOTON AUTORELLENAR: Consulta DIRECTA a Supabase
     // -----------------------------------------------------------------------
     async function fillFormFromBCN() {
       const fecha = document.getElementById('input-date').value;
       const hora  = document.getElementById('input-time').value;
       const btn   = document.getElementById('btn-autofill');
 
-      if (!fecha || !hora) {
-        showToast('Selecciona fecha y hora primero', true);
-        return;
-      }
+      if (!fecha || !hora) return showToast('Selecciona fecha y hora primero', true);
 
-      // Feedback visual mientras carga
       btn.disabled = true;
-      btn.textContent = '⏳ Buscando datos...';
+      btn.textContent = '⏳ Buscando en Supabase...';
 
       try {
-        // Llamamos al proxy con parametros de fecha y hora para historico
-        const url = '/api/boya?fecha=' + encodeURIComponent(fecha) + '&hora=' + encodeURIComponent(hora);
-        const res = await fetch(url);
-        const datos = await res.json();
+        const targetDateMs = new Date(`${fecha}T${hora}:00`).getTime();
+        
+        const minDate = new Date(targetDateMs - 48 * 60 * 60 * 1000).toISOString();
+        const maxDate = new Date(targetDateMs + 48 * 60 * 60 * 1000).toISOString();
 
-        if (!res.ok || datos.error) {
-          throw new Error(datos.error || 'Error del servidor');
+        const { data, error } = await supabaseClient
+          .from('boya_barcelona')
+          .select('*')
+          .gte('fecha_oficial', minDate)
+          .lte('fecha_oficial', maxDate);
+
+        if (error || !data || data.length === 0) throw new Error('Sin datos');
+
+        let closest = data[0];
+        let minDiff = Math.abs(targetDateMs - new Date(closest.fecha_oficial).getTime());
+
+        for(let d of data) {
+          let diff = Math.abs(targetDateMs - new Date(d.fecha_oficial).getTime());
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = d;
+          }
         }
 
-        // Rellenamos los campos del formulario con los datos de la boya
-        if (datos.hs !== null)   document.getElementById('input-wave-height').value = datos.hs;
-        if (datos.hmax !== null) document.getElementById('input-wave-max').value    = datos.hmax;
-        if (datos.tp !== null)   document.getElementById('input-period').value      = datos.tp;
-        if (datos.dir)           document.getElementById('input-sea-dir').value     = datos.dir;
+        if (closest.hs !== null)   document.getElementById('input-wave-height').value = closest.hs;
+        if (closest.hmax !== null) document.getElementById('input-wave-max').value    = closest.hmax;
+        if (closest.tp !== null)   document.getElementById('input-period').value      = closest.tp;
+        if (closest.dir)           document.getElementById('input-sea-dir').value     = closest.dir;
 
-        // Mensaje informativo con la diferencia horaria encontrada
-        const diffMsg = datos.diferenciaMinutos <= 30
-          ? 'Datos exactos de la boya 📡'
-          : 'Datos mas cercanos disponibles (' + datos.diferenciaMinutos + ' min de diferencia)';
-
-        showToast(diffMsg);
+        const diffMinutos = Math.round(minDiff / 60000);
+        showToast(diffMinutos <= 30 ? 'Datos exactos cargados 📡' : `Datos cercanos (${diffMinutos} min dif.)`);
 
       } catch (err) {
-        console.error('[fillFormFromBCN] Error:', err.message);
-        showToast('No se encontraron datos para esa fecha y hora', true);
+        showToast('No hay datos guardados para esa fecha', true);
       } finally {
         btn.disabled = false;
-        btn.textContent = '📡 Rellenar con datos de la Boya';
+        btn.textContent = '📡 Rellenar con historial de Supabase';
       }
+    }
+
+    // -----------------------------------------------------------------------
+    // GRAFICA DE ESTADISTICAS (Chart.js)
+    // -----------------------------------------------------------------------
+    async function renderChart() {
+      const { data, error } = await supabaseClient.from('sessions').select('waveHeight, period');
+      if (error || !data || data.length === 0) return;
+
+      const conteo = {};
+      data.forEach(s => {
+        if (s.waveHeight && s.period) {
+          const key = `${s.waveHeight}-${s.period}`;
+          if (!conteo[key]) conteo[key] = { x: s.period, y: s.waveHeight, r: 0 };
+          conteo[key].r += 6; 
+        }
+      });
+
+      const bubbleData = Object.values(conteo);
+      const ctx = document.getElementById('surfChart').getContext('2d');
+
+      if (surfChartInstance) surfChartInstance.destroy();
+
+      surfChartInstance = new Chart(ctx, {
+        type: 'bubble',
+        data: {
+          datasets: [{
+            label: 'Baños registrados',
+            data: bubbleData,
+            backgroundColor: 'rgba(20, 184, 166, 0.6)',
+            borderColor: 'rgba(20, 184, 166, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: 'Periodo (Segundos)', color: '#94a3b8' }, ticks: { color: '#94a3b8'} },
+            y: { title: { display: true, text: 'Altura (Metros)', color: '#94a3b8' }, ticks: { color: '#94a3b8'} }
+          },
+          plugins: { legend: { display: false } }
+        }
+      });
     }
 
     // -----------------------------------------------------------------------
@@ -347,13 +390,11 @@
 
       if (!session.spot || !currentRating) return showToast('Falta spot o puntuación', true);
 
-      // Guardamos el nombre en localStorage para la proxima sesion
       localStorage.setItem('wavelog_username', surferName);
 
       const { error } = await supabaseClient.from('sessions').insert([session]);
       if (error) {
         showToast('Error al guardar', true);
-        console.error(error);
       } else {
         showToast('¡Guardado en el grupo! 🤙');
         document.getElementById('input-spot').value      = '';
@@ -365,7 +406,7 @@
     }
 
     // -----------------------------------------------------------------------
-    // HISTORIAL DEL GRUPO
+    // HISTORIAL DEL GRUPO Y ORACULO
     // -----------------------------------------------------------------------
     async function renderSessions() {
       const container = document.getElementById('sessions-list');
@@ -406,9 +447,6 @@
       renderSessions();
     }
 
-    // -----------------------------------------------------------------------
-    // EL ORACULO
-    // -----------------------------------------------------------------------
     async function runOracle() {
       const h = parseFloat(document.getElementById('oracle-wave-height').value);
       const { data } = await supabaseClient.from('sessions').select('*');
@@ -427,9 +465,6 @@
       }
     }
 
-    // -----------------------------------------------------------------------
-    // UTILIDADES
-    // -----------------------------------------------------------------------
     function showToast(msg, isError) {
       const t = document.getElementById('toast');
       t.textContent = msg;
@@ -439,16 +474,14 @@
     }
 
     // -----------------------------------------------------------------------
-    // INICIALIZACION AL CARGAR LA WEB
+    // INICIALIZACION
     // -----------------------------------------------------------------------
     const savedName = localStorage.getItem('wavelog_username');
     if (savedName) document.getElementById('input-surfer').value = savedName;
 
-    // Fecha y hora actual como valores por defecto del formulario
     document.getElementById('input-date').value = new Date().toISOString().split('T')[0];
     document.getElementById('input-time').value = new Date().toTimeString().slice(0, 5);
 
-    // Cargamos datos en tiempo real del widget superior
     fetchPortusData();
   </script>
 </body>
