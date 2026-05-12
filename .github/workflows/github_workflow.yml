@@ -5,19 +5,15 @@ on:
   workflow_dispatch:
 jobs:
   run-oracle:
-    name: Calcular y guardar pronostico IA
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
-      - name: Configurar Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Instalar dependencias
-        run: npm install @supabase/supabase-js
+      - run: npm install @supabase/supabase-js
       - name: Ejecutar Oracle
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node oracle.mjs
