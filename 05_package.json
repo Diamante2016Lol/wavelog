@@ -1,0 +1,15 @@
+{
+  "name": "wavelog-oracle",
+  "version": "1.0.0",
+  "description": "WaveLog Ensemble Forecaster - Robot diario de pronostico de olas con IA",
+  "type": "module",
+  "scripts": {
+    "oracle": "node oracle.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
