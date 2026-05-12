@@ -25,378 +25,763 @@
 
   <style>
     :root {
-      --bg: #030e1b; --surface: #071828; --card: rgba(6, 24, 46, 0.8);
-      --border: rgba(20, 184, 166, 0.2); --teal: #14b8a6; --teal-light: #2dd4bf;
-      --sky: #0ea5e9; --foam: #dff0ef; --muted: #4a7a8a;
+      --bg: #030e1b; --surface: #071828; --card: rgba(6,24,46,0.88); --card-border: rgba(20,184,166,0.22);
+      --teal: #14b8a6; --teal-light: #2dd4bf; --sky: #0ea5e9; --foam: #dff0ef;
+      --muted: #4a7a8a; --gold: #f59e0b; --red: #ef4444; --purple: #7c3aed;
+      --green: #22c55e;
     }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--foam); min-height:100vh; overflow-x:hidden; -webkit-font-smoothing:antialiased; }
 
-    body {
-      background-color: var(--bg); color: var(--foam);
-      background-image: radial-gradient(circle at top right, #0c2b4a, #030e1b);
-      background-attachment: fixed;
+    .ocean-bg { position:fixed; inset:0; z-index:0;
+      background: radial-gradient(ellipse at 15% 40%, rgba(14,165,233,0.09) 0%, transparent 55%),
+                  radial-gradient(ellipse at 85% 15%, rgba(20,184,166,0.07) 0%, transparent 50%),
+                  radial-gradient(ellipse at 50% 90%, rgba(6,25,55,0.5) 0%, transparent 65%),
+                  linear-gradient(170deg, #030e1b 0%, #05162a 50%, #030c18 100%); }
+
+    #app { position:relative; z-index:1; max-width:620px; margin:0 auto; padding:0 15px 90px; }
+
+    .app-header { padding:22px 0 14px; text-align:center; }
+    .app-logo { font-family:'Syne',sans-serif; font-size:2.1rem; font-weight:800; letter-spacing:-0.03em;
+      background:linear-gradient(135deg, #2dd4bf 0%, #0ea5e9 60%, #38bdf8 100%);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; line-height:1.1; cursor:pointer; }
+    .app-tagline { font-size:0.67rem; color:var(--muted); letter-spacing:0.2em; text-transform:uppercase; margin-top:3px; }
+
+    .conditions-bar { background:var(--card); border:1px solid var(--card-border); border-radius:16px;
+      padding:13px 16px; margin-bottom:18px; backdrop-filter:blur(14px); }
+    .conditions-label { font-family:'JetBrains Mono',monospace; font-size:0.63rem; letter-spacing:0.2em; text-transform:uppercase; color:var(--teal); margin-bottom:9px; }
+    .conditions-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+    .condition-item { text-align:center; }
+    .condition-value { font-family:'JetBrains Mono',monospace; font-size:1.35rem; font-weight:600; color:#fff; line-height:1; }
+    .condition-label { font-size:0.58rem; color:var(--muted); margin-top:1px; }
+    .status-dot { width:6px; height:6px; border-radius:50%; display:inline-block; animation:dotPulse 2.2s ease-in-out infinite; }
+    .status-dot.live   { background:#22c55e; }
+    .status-dot.mock   { background:var(--gold); }
+    .status-dot.loading{ background:var(--sky); }
+    @keyframes dotPulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.75)} }
+
+    .tab-nav { display:flex; gap:5px; background:rgba(6,20,42,0.75); border:1px solid var(--card-border);
+      border-radius:14px; padding:5px; margin-bottom:18px; backdrop-filter:blur(12px); }
+    .tab-btn { flex:1; padding:9px 4px; border-radius:10px; border:1px solid transparent;
+      background:transparent; color:var(--muted); font-family:'DM Sans',sans-serif; font-size:0.68rem;
+      font-weight:500; cursor:pointer; transition:all 0.22s ease; display:flex; flex-direction:column;
+      align-items:center; gap:2px; -webkit-tap-highlight-color:transparent; }
+    .tab-btn.active { background:linear-gradient(135deg,rgba(20,184,166,0.18),rgba(14,165,233,0.13));
+      color:var(--teal-light); border-color:rgba(20,184,166,0.28); }
+
+    .panel { display:none; animation:fadeUp 0.28s ease; }
+    .panel.active { display:block; }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+
+    .glass-card { background:var(--card); border:1px solid var(--card-border); border-radius:18px;
+      padding:18px 18px 20px; backdrop-filter:blur(16px); position:relative; margin-bottom:14px; }
+    .section-title { font-family:'Syne',sans-serif; font-size:1.05rem; font-weight:700; color:#fff;
+      margin-bottom:14px; display:flex; align-items:center; gap:7px; }
+    .form-group { margin-bottom:12px; }
+    .form-label { display:block; font-family:'JetBrains Mono',monospace; font-size:0.63rem; color:var(--teal);
+      letter-spacing:0.13em; text-transform:uppercase; margin-bottom:5px; }
+    .form-input { width:100%; background:rgba(3,12,26,0.75); border:1px solid rgba(20,184,166,0.2);
+      border-radius:10px; padding:9px 12px; color:var(--foam); font-size:0.88rem; outline:none; }
+    .form-grid-2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+    .form-grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+    .form-grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+
+    .star-rating { display:flex; gap:4px; }
+    .star-btn { font-size:1.9rem; cursor:pointer; color:rgba(30,60,90,0.8); border:none; background:none; padding:1px 3px; -webkit-tap-highlight-color:transparent; }
+    .star-btn.active { color:var(--gold); filter:drop-shadow(0 0 7px rgba(245,158,11,0.55)); }
+
+    .btn-primary { width:100%; padding:13px; background:linear-gradient(135deg,#14b8a6 0%,#0ea5e9 100%);
+      border:none; border-radius:12px; color:#fff; font-family:'Syne',sans-serif; font-weight:700;
+      cursor:pointer; margin-top:4px; box-shadow:0 4px 22px rgba(20,184,166,0.25); -webkit-tap-highlight-color:transparent; }
+    .btn-secondary { background:none; border:1px solid rgba(14,165,233,0.3); border-radius:8px; padding:7px 13px;
+      color:var(--sky); font-family:'JetBrains Mono',monospace; font-size:0.68rem; cursor:pointer; width:100%; margin-bottom:10px; }
+    .btn-secondary:disabled { opacity:0.55; cursor:not-allowed; }
+
+    .session-card { background:rgba(5,18,40,0.65); border:1px solid rgba(20,184,166,0.16); border-radius:13px; padding:13px 14px; margin-bottom:11px; position:relative; }
+    .session-spot { font-family:'Syne',sans-serif; font-weight:700; font-size:0.98rem; color:#fff; }
+    .session-surfer { font-size:0.65rem; color:var(--teal-light); font-weight:normal; margin-left:6px; }
+    .session-date { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); }
+    .condition-tag { background:rgba(20,184,166,0.1); border:1px solid rgba(20,184,166,0.2); border-radius:5px;
+      padding:2px 7px; font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--teal);
+      margin-right:4px; display:inline-block; margin-top:4px; }
+    .delete-btn { position:absolute; top:11px; right:10px; color:rgba(239,68,68,0.35); cursor:pointer; font-size:0.82rem; padding:4px; border:none; background:none; }
+
+    .toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(80px);
+      background:rgba(20,184,166,0.95); color:#fff; padding:11px 22px; border-radius:30px; font-size:0.83rem;
+      z-index:9999; transition:transform 0.38s cubic-bezier(0.34,1.56,0.64,1); }
+    .toast.show { transform:translateX(-50%) translateY(0); }
+
+    /* =====================================================================
+       ESTILOS EXCLUSIVOS DEL ORACULO IA
+       ===================================================================== */
+
+    /* Selector de dias */
+    .day-tabs { display:flex; gap:6px; margin-bottom:16px; }
+    .day-tab { flex:1; padding:8px 6px; border-radius:10px; border:1px solid rgba(124,58,237,0.25);
+      background:rgba(124,58,237,0.07); color:var(--muted); font-family:'DM Sans',sans-serif;
+      font-size:0.72rem; font-weight:500; cursor:pointer; text-align:center; transition:all 0.2s;
+      -webkit-tap-highlight-color:transparent; }
+    .day-tab.active { background:linear-gradient(135deg,rgba(124,58,237,0.22),rgba(79,70,229,0.15));
+      color:#c4b5fd; border-color:rgba(124,58,237,0.45); }
+
+    /* Cabecera de resumen del dia */
+    .oracle-day-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .oracle-day-title { font-family:'Syne',sans-serif; font-size:0.95rem; font-weight:700; color:#fff; }
+    .oracle-day-date { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); text-transform:uppercase; }
+
+    /* Badge de calidad general del dia */
+    .day-quality-badge {
+      display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:20px;
+      font-family:'JetBrains Mono',monospace; font-size:0.68rem; font-weight:600;
+      margin-bottom:14px; border:1px solid;
     }
+    .day-quality-badge.q5 { background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.35); color:var(--gold); }
+    .day-quality-badge.q4 { background:rgba(20,184,166,0.12); border-color:rgba(20,184,166,0.35); color:var(--teal-light); }
+    .day-quality-badge.q3 { background:rgba(14,165,233,0.1);  border-color:rgba(14,165,233,0.3);  color:var(--sky); }
+    .day-quality-badge.q2 { background:rgba(74,122,138,0.12); border-color:rgba(74,122,138,0.3);  color:var(--muted); }
+    .day-quality-badge.q1 { background:rgba(239,68,68,0.08);  border-color:rgba(239,68,68,0.2);   color:#f87171; }
 
-    .glass { background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--border); }
-    .neon-text { text-shadow: 0 0 15px rgba(20, 184, 166, 0.4); }
-    
-    input, select, textarea {
-      background: rgba(0,0,0,0.3) !important; border: 1px solid var(--border) !important;
-      color: white !important; border-radius: 12px !important;
-    }
+    /* Separador de franja horaria */
+    .franja-header { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:0.18em;
+      text-transform:uppercase; color:var(--purple); margin:16px 0 8px; display:flex; align-items:center; gap:6px; }
+    .franja-header::after { content:''; flex:1; height:1px; background:rgba(124,58,237,0.2); }
 
-    .tab-active { color: var(--teal); border-bottom: 2px solid var(--teal); }
-    
-    #toast {
-      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(100px);
-      transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    }
-    #toast.show { transform: translateX(-50%) translateY(0); }
+    /* Tarjeta de hora */
+    .hora-card { background:rgba(5,12,32,0.7); border:1px solid rgba(124,58,237,0.18); border-radius:13px;
+      padding:11px 13px; margin-bottom:8px; display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center; }
+    .hora-card.best-window { border-color:rgba(245,158,11,0.4); background:rgba(245,158,11,0.06);
+      box-shadow:0 0 18px rgba(245,158,11,0.08); }
 
-    .model-dot { width: 8px; height: 8px; border-radius: 2px; }
+    .hora-time { font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:600; color:var(--teal);
+      width:38px; text-align:center; }
+    .hora-main { flex:1; }
+    .hora-hs { font-family:'Syne',sans-serif; font-size:1.2rem; font-weight:800; color:#fff; line-height:1; }
+    .hora-hs span { font-size:0.65rem; font-family:'DM Sans',sans-serif; font-weight:400; color:var(--muted); margin-left:3px; }
+    .hora-models { font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:var(--muted); margin-top:4px; line-height:1.7; }
+    .model-val { display:inline-block; }
+    .model-val.highlight { color:var(--teal-light); }
+    .hora-meta { font-family:'JetBrains Mono',monospace; font-size:0.6rem; color:var(--muted); text-align:right; line-height:1.7; }
+    .hora-stars { font-size:0.7rem; letter-spacing:-0.05em; }
+
+    /* Barra de comparacion de modelos */
+    .model-bar-row { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
+    .model-bar-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted); width:36px; flex-shrink:0; }
+    .model-bar-track { flex:1; background:rgba(255,255,255,0.05); border-radius:3px; height:5px; }
+    .model-bar-fill  { height:5px; border-radius:3px; }
+    .model-bar-val   { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:#94a3b8; width:30px; text-align:right; flex-shrink:0; }
+
+    /* Estado vacio / error del Oraculo */
+    .oracle-empty { text-align:center; padding:32px 20px; }
+    .oracle-empty .big-icon { font-size:2.8rem; margin-bottom:12px; }
+    .oracle-empty h3 { font-family:'Syne',sans-serif; font-size:0.95rem; color:#fff; margin-bottom:8px; }
+    .oracle-empty p  { font-size:0.78rem; color:var(--muted); line-height:1.6; }
+
+    /* Badge de actualizacion */
+    .oracle-update-badge { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;
+      background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.2); border-radius:10px; padding:8px 12px; }
+    .update-time { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:#c4b5fd; }
+    .update-next { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); }
+
+    /* ADMIN TAB (oculto por defecto) */
+    #tab-admin { display:none; }
+    .admin-card { background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.25); border-radius:16px; padding:18px; margin-bottom:14px; }
+    .admin-title { font-family:'Syne',sans-serif; font-size:1rem; font-weight:700; color:#c4b5fd; margin-bottom:12px; }
+    .admin-input { width:100%; background:rgba(3,12,26,0.75); border:1px solid rgba(124,58,237,0.25);
+      border-radius:10px; padding:9px 12px; color:var(--foam); font-size:0.82rem; font-family:'JetBrains Mono',monospace; outline:none; margin-bottom:10px; }
+    .btn-admin { width:100%; padding:11px; background:linear-gradient(135deg,#7c3aed,#4f46e5); border:none;
+      border-radius:11px; color:#fff; font-family:'Syne',sans-serif; font-weight:700; cursor:pointer; margin-bottom:8px; }
+    #admin-log { background:rgba(0,0,0,0.4); border:1px solid rgba(124,58,237,0.15); border-radius:10px;
+      padding:12px; font-family:'JetBrains Mono',monospace; font-size:0.68rem; color:#94a3b8;
+      height:150px; overflow-y:auto; white-space:pre-wrap; line-height:1.6; }
   </style>
 </head>
-<body class="min-h-screen pb-12">
 
-  <header class="pt-8 pb-6 px-6 max-w-5xl mx-auto flex justify-between items-end">
-    <div>
-      <h1 class="font-syne text-4xl font-800 tracking-tighter text-white neon-text">WaveLog</h1>
-      <p class="font-dm text-teal-400 font-medium tracking-wide text-sm uppercase">Barcelona Surf Ensemble</p>
-    </div>
-    <div class="text-right hidden sm:block">
-      <div id="header-temp" class="font-syne text-2xl font-700">--°</div>
-      <div class="text-[10px] text-muted font-mono uppercase">Open-Meteo Realtime</div>
-    </div>
-  </header>
+<body>
+  <div class="ocean-bg"></div>
+  <div id="toast" class="toast"></div>
 
-  <nav class="max-w-5xl mx-auto px-6 mb-8 flex gap-8 border-b border-white/5">
-    <button onclick="switchTab('forecast')" id="tab-forecast" class="pb-3 font-syne font-700 text-sm tracking-widest uppercase tab-active">Pronóstico IA</button>
-    <button onclick="switchTab('journal')" id="tab-journal" class="pb-3 font-syne font-700 text-sm tracking-widest uppercase text-muted">Diario de Sesiones</button>
-    <button onclick="switchTab('admin')" id="tab-admin" class="pb-3 font-syne font-700 text-sm tracking-widest uppercase text-muted">Admin</button>
-  </nav>
+  <div id="app">
+    <header class="app-header">
+      <div class="app-logo" id="logo-tap">🌊 WaveLog Cloud</div>
+      <div class="app-tagline">Diario de Surf Compartido</div>
+    </header>
 
-  <main class="max-w-5xl mx-auto px-4 sm:px-6">
-
-    <div id="section-forecast" class="space-y-6">
-      
-      <div class="glass rounded-3xl p-6 relative overflow-hidden">
-        <div class="absolute top-0 right-0 p-4 opacity-10 font-syne text-6xl font-800 italic">LIVE</div>
-        <div class="flex flex-wrap gap-8 items-center">
-          <div>
-            <div class="text-[10px] text-muted font-mono uppercase mb-1">Boya de Barcelona</div>
-            <div id="portus-hs" class="font-syne text-4xl font-800">--m</div>
-          </div>
-          <div class="grid grid-cols-2 gap-x-6 gap-y-1">
-            <div class="text-[10px] text-muted font-mono">PERIODO</div>
-            <div id="portus-tp" class="text-sm font-bold">--s</div>
-            <div class="text-[10px] text-muted font-mono">DIRECCIÓN</div>
-            <div id="portus-dir" class="text-sm font-bold">--°</div>
-          </div>
-          <div class="ml-auto text-right">
-            <div id="portus-time" class="text-[10px] text-muted font-mono uppercase">Sincronizando...</div>
-          </div>
-        </div>
+    <div class="conditions-bar">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span class="conditions-label">📡 Boya Barcelona (Supabase)</span>
+        <button onclick="fetchPortusData()" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
       </div>
-
-      <div id="oracle-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div class="col-span-full py-12 text-center text-muted font-mono animate-pulse">Consultando al Oráculo...</div>
+      <div id="conditions-content">
+        <div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Cargando datos...</div>
       </div>
     </div>
 
-    <div id="section-journal" class="hidden space-y-6">
-      <div class="glass rounded-3xl p-6">
-        <h3 class="font-syne text-xl font-700 mb-6">Registrar Nueva Sesión</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-          <div class="space-y-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Surfer</label>
-            <input type="text" id="input-surfer" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none transition-all" placeholder="Nombre">
-          </div>
-          <div class="space-y-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Fecha</label>
-            <input type="date" id="input-date" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none">
-          </div>
-          <div class="space-y-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Hora</label>
-            <input type="time" id="input-time" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none">
-          </div>
-          <div class="space-y-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Altura Percibida (m)</label>
-            <input type="number" id="input-hs" step="0.1" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none" placeholder="Ej: 0.8">
-          </div>
-          <div class="space-y-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Calidad del Baño</label>
-            <select id="input-rating" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none">
-              <option value="5">⭐⭐⭐⭐⭐ Épico</option>
-              <option value="4">⭐⭐⭐⭐ Muy Bueno</option>
-              <option value="3" selected>⭐⭐⭐ Cumplidor</option>
-              <option value="2">⭐⭐ Raspado</option>
-              <option value="1">⭐ Plato / Chusta</option>
-            </select>
-          </div>
-          <div class="space-y-1 sm:col-span-2 md:col-span-1">
-            <label class="text-[10px] font-mono text-muted uppercase">Spot</label>
-            <input type="text" id="input-spot" class="w-full px-4 py-3 text-sm focus:ring-1 focus:ring-teal-500 outline-none" value="Barcelona (Poblenou)">
+    <nav class="tab-nav">
+      <button class="tab-btn active" onclick="switchTab('log')"     id="tab-log">    <span>📝</span><span>Registrar</span></button>
+      <button class="tab-btn"        onclick="switchTab('history')" id="tab-history"><span>🏄</span><span>Grupo</span></button>
+      <button class="tab-btn"        onclick="switchTab('oracle')"  id="tab-oracle"> <span>🔮</span><span>Oráculo</span></button>
+      <button class="tab-btn"        onclick="switchTab('stats')"   id="tab-stats">  <span>📊</span><span>Gráfica</span></button>
+      <button class="tab-btn"        onclick="switchTab('admin')"   id="tab-admin">  <span>🧠</span><span>Admin</span></button>
+    </nav>
+
+    <section id="panel-log" class="panel active">
+      <div class="glass-card">
+        <div class="section-title">📝 Nuevo Baño</div>
+        <div class="form-grid-2">
+          <div class="form-group"><label class="form-label">Fecha</label><input type="date" id="input-date" class="form-input"></div>
+          <div class="form-group"><label class="form-label">Hora</label><input type="time" id="input-time" class="form-input"></div>
+        </div>
+        <div class="form-grid-2">
+          <div class="form-group"><label class="form-label">Spot</label><input type="text" id="input-spot" class="form-input" placeholder="Ej: La Barceloneta"></div>
+          <div class="form-group"><label class="form-label">Tu Nombre</label><input type="text" id="input-surfer" class="form-input" placeholder="Para el grupo"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Puntuación</label>
+          <div class="star-rating" id="star-rating-log">
+            <button class="star-btn" onclick="setRating(1)">★</button><button class="star-btn" onclick="setRating(2)">★</button>
+            <button class="star-btn" onclick="setRating(3)">★</button><button class="star-btn" onclick="setRating(4)">★</button>
+            <button class="star-btn" onclick="setRating(5)">★</button>
           </div>
         </div>
-        <div class="space-y-1 mb-6">
-          <label class="text-[10px] font-mono text-muted uppercase">Comentarios / Notas del parte</label>
-          <textarea id="input-notes" class="w-full px-4 py-3 text-sm h-24 focus:ring-1 focus:ring-teal-500 outline-none" placeholder="¿Cómo rompía? ¿Mucho viento?"></textarea>
+        <button class="btn-secondary" id="btn-autofill" onclick="fillFormFromBCN()">📡 Rellenar con historial de Supabase</button>
+        <div class="form-grid-4">
+          <div class="form-group"><label class="form-label">Hs (m)</label>  <input type="number" id="input-wave-height" class="form-input" step="0.1"></div>
+          <div class="form-group"><label class="form-label">Hmax</label>    <input type="number" id="input-wave-max"    class="form-input" step="0.1"></div>
+          <div class="form-group"><label class="form-label">Tp (s)</label>   <input type="number" id="input-period"      class="form-input" step="0.5"></div>
+          <div class="form-group"><label class="form-label">Dir.</label>
+            <select id="input-sea-dir" class="form-input"><option value="">-</option><option>N</option><option>NE</option><option>E</option><option>SE</option><option>S</option><option>SO</option><option>O</option><option>NO</option></select>
+          </div>
         </div>
-        <button onclick="saveSession()" class="w-full py-4 bg-teal-500 hover:bg-teal-400 text-bg font-syne font-800 text-sm uppercase tracking-widest rounded-2xl transition-all">
-          Guardar Sesión en WaveLog
-        </button>
+        <div class="form-grid-2">
+          <div class="form-group"><label class="form-label">Dir. Viento</label>
+            <select id="input-wind-dir" class="form-input"><option value="">-</option><option>N</option><option>NE</option><option>E</option><option>SE</option><option>S</option><option>SO</option><option>O</option><option>NO</option></select>
+          </div>
+          <div class="form-group"><label class="form-label">Fuerza Viento (kt)</label><input type="text" id="input-wind-force" class="form-input" placeholder="Ej: 6-9"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Notas</label><textarea id="input-notes" class="form-input" placeholder="¿Había mucha gente?"></textarea></div>
+        <button class="btn-primary" onclick="submitSession()">💾 Guardar en la Nube</button>
+      </div>
+    </section>
+
+    <section id="panel-history" class="panel">
+      <div class="glass-card">
+        <div class="section-title">🏄 Sesiones del Grupo</div>
+        <div id="sessions-list"></div>
+      </div>
+    </section>
+
+    <section id="panel-oracle" class="panel">
+      <div class="glass-card">
+        <div class="section-title">🔮 El Oráculo — IA Forecaster</div>
+
+        <div class="oracle-update-badge" id="oracle-update-badge" style="display:none;">
+          <span class="update-time" id="oracle-update-time">—</span>
+          <span class="update-next">🤖 Próx. actualización: 06:00 UTC</span>
+        </div>
+
+        <div class="day-tabs" id="day-tabs"></div>
+
+        <div id="oracle-content">
+          <div class="oracle-empty">
+            <div class="big-icon">⏳</div>
+            <h3>Cargando pronóstico...</h3>
+            <p>Consultando el Oráculo...</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-stats" class="panel">
+      <div class="glass-card">
+        <div class="section-title">📊 Estadísticas (Días de Surf)</div>
+        <p class="text-xs text-slate-500 mb-4">Altura (Hs) vs Periodo (Tp). Burbujas más grandes = más baños registrados.</p>
+        <div style="position:relative; height:280px; width:100%;"><canvas id="surfChart"></canvas></div>
+      </div>
+    </section>
+
+    <section id="panel-admin" class="panel">
+      <div class="admin-card">
+        <div class="admin-title">🧠 Entrenador IA — Admin</div>
+        <p style="font-size:0.75rem; color:var(--muted); margin-bottom:14px; line-height:1.6;">
+          Para entrenar el modelo completo con todas las opciones,
+          usa el archivo <code style="color:#c4b5fd;">02_admin_entrenamiento.html</code>.
+          Aqui puedes ver el estado actual del modelo.
+        </p>
+        <button class="btn-admin" onclick="adminVerEstado()">🔍 Ver estado del modelo activo</button>
+        <button class="btn-admin" style="background:linear-gradient(135deg,#0ea5e9,#14b8a6);" onclick="adminForzarOracle()">▶ Simular lectura de pesos</button>
+        <div id="admin-log">Esperando accion...\n</div>
       </div>
 
-      <div id="sessions-list" class="space-y-4">
-        </div>
-    </div>
-
-    <div id="section-admin" class="hidden space-y-6">
-      <div class="glass rounded-3xl p-6">
-        <h3 class="font-syne text-xl font-700 mb-4">Panel de Control</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <button onclick="adminLimpiarForecast()" class="p-4 border border-red-500/30 bg-red-500/5 hover:bg-red-500/10 text-red-400 font-mono text-[10px] uppercase rounded-xl transition-all">
-            Limpiar Pronósticos Antiguos
-          </button>
-          <a href="02_admin_entrenamiento.html" class="p-4 border border-teal-500/30 bg-teal-500/5 hover:bg-teal-500/10 text-teal-400 font-mono text-[10px] uppercase rounded-xl text-center">
-            Módulo de Entrenamiento IA
-          </a>
-        </div>
-        <div id="admin-log" class="mt-6 font-mono text-[10px] text-muted bg-black/40 p-4 rounded-xl h-32 overflow-y-auto">
-          > Sistema listo para monitorización...
-        </div>
+      <div class="admin-card">
+        <div class="admin-title">🗑 Mantenimiento</div>
+        <button class="btn-admin" style="background:rgba(239,68,68,0.25); border:1px solid rgba(239,68,68,0.3);"
+                onclick="adminLimpiarForecast()">⚠ Borrar forecast_ai anterior a hoy</button>
       </div>
-    </div>
+    </section>
 
-  </main>
+  </div><script>
+    // -------------------------------------------------------------------------
+    // CONFIGURACION SUPABASE
+    // -------------------------------------------------------------------------
+    const SUPABASE_URL = 'https://vpmpgxiwrquzbcahsnfs.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwbXBneGl3cnF1emJjYWhzbmZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0MjM3MjgsImV4cCI6MjA5Mzk5OTcyOH0.GJH0k3dxtQ_xMHmCphAl1INRzraf20LbBv4LTOzXWNw';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  <div id="toast" class="px-6 py-3 rounded-full glass font-syne font-700 text-xs text-white z-50 shadow-2xl">
-    Mensaje de sistema
-  </div>
+    let currentRating      = 0;
+    let surfChartInstance  = null;
+    let oracleData         = null; // todos los datos de forecast_ai
+    let oracleSelectedDay  = 0;   // 0=hoy, 1=mañana, 2=pasado
 
-  <script>
-    // CONFIGURACIÓN SUPABASE
-    const SB_URL = "TU_URL_SUPABASE"; 
-    const SB_KEY = "TU_ANON_KEY"; 
-    const supabaseClient = supabase.createClient(SB_URL, SB_KEY);
+    // -------------------------------------------------------------------------
+    // TRIPLE TAP EN LOGO = ACTIVAR ADMIN
+    // -------------------------------------------------------------------------
+    let logoTaps = 0, logoTimer = null;
+    document.getElementById('logo-tap').addEventListener('click', () => {
+      logoTaps++;
+      clearTimeout(logoTimer);
+      logoTimer = setTimeout(() => { logoTaps = 0; }, 600);
+      if (logoTaps >= 3) {
+        logoTaps = 0;
+        const tab = document.getElementById('tab-admin');
+        const esVisible = tab.style.display !== 'none';
+        tab.style.display = esVisible ? 'none' : 'flex';
+        if (!esVisible) {
+          showToast('Panel admin activado 🧠');
+          switchTab('admin');
+        }
+      }
+    });
 
-    let oracleData = null;
-
-    // =========================================================================
-    // NAVEGACIÓN
-    // =========================================================================
-    function switchTab(tab) {
-      const sections = ['forecast', 'journal', 'admin'];
-      sections.forEach(s => {
-        document.getElementById(`section-${s}`).classList.add('hidden');
-        document.getElementById(`tab-${s}`).classList.remove('tab-active');
-        document.getElementById(`tab-${s}`).classList.add('text-muted');
-      });
-      document.getElementById(`section-${tab}`).classList.remove('hidden');
-      document.getElementById(`tab-${tab}`).classList.add('tab-active');
-      document.getElementById(`tab-${tab}`).classList.remove('text-muted');
-
-      if (tab === 'journal') fetchSessions();
-      if (tab === 'forecast') renderOracle();
+    // -------------------------------------------------------------------------
+    // NAVEGACION POR TABS
+    // -------------------------------------------------------------------------
+    function switchTab(tabId) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('panel-' + tabId).classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+      if (tabId === 'history') renderSessions();
+      if (tabId === 'stats')   renderChart();
+      if (tabId === 'oracle')  renderOracle();
     }
 
-    // =========================================================================
-    // BOYA REAL (PORTUS / OPEN-METEO)
-    // =========================================================================
-    async function fetchPortusData() {
-      try {
-        // Usamos Open-Meteo como fuente de temperatura y "live" para Hs aproximado
-        const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=41.38&longitude=2.15&current=temperature_2m,relative_humidity_2m&marine=wave_height,wave_period,wave_direction');
-        const mRes = await fetch('https://marine-api.open-meteo.com/v1/marine?latitude=41.38&longitude=2.15&current=wave_height,wave_period,wave_direction');
-        
-        const data = await res.json();
-        const marine = await mRes.json();
+    function setRating(v) {
+      currentRating = v;
+      document.querySelectorAll('#star-rating-log .star-btn').forEach((b, i) => b.classList.toggle('active', i < v));
+    }
 
-        document.getElementById('header-temp').textContent = Math.round(data.current.temperature_2m) + '°';
-        document.getElementById('portus-hs').textContent = marine.current.wave_height.toFixed(2) + 'm';
-        document.getElementById('portus-tp').textContent = marine.current.wave_period + 's';
-        document.getElementById('portus-dir').textContent = marine.current.wave_direction + '°';
-        document.getElementById('portus-time').textContent = 'Live: ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-      } catch (e) {
-        console.error("Error Boya:", e);
+    // -------------------------------------------------------------------------
+    // BOYA BARCELONA
+    // -------------------------------------------------------------------------
+    async function fetchPortusData() {
+      const contenedor = document.getElementById('conditions-content');
+      contenedor.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando...</div>';
+      try {
+        const { data, error } = await supabaseClient
+          .from('boya_barcelona').select('*').order('fecha_oficial', { ascending: false }).limit(1);
+        if (error || !data || !data.length) throw new Error('Sin datos');
+        const d = data[0];
+        const horaStr = d.fecha_oficial
+          ? new Date(d.fecha_oficial).toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' })
+          : '--:--';
+        contenedor.innerHTML = `
+          <div class="conditions-grid">
+            <div class="condition-item"><div class="condition-value">${d.hs ?? '--'}</div><div class="condition-label">Hs (m)</div></div>
+            <div class="condition-item"><div class="condition-value">${d.hmax ?? '--'}</div><div class="condition-label">Hmax (m)</div></div>
+            <div class="condition-item"><div class="condition-value">${d.tp ?? '--'}</div><div class="condition-label">Tp (s)</div></div>
+            <div class="condition-item"><div class="condition-value">${d.dir || '--'}</div><div class="condition-label">Dir</div></div>
+          </div>
+          <div style="margin-top:7px; display:flex; align-items:center; gap:5px;">
+            <span class="status-dot live"></span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">
+              Sincronizado via GitHub · ${horaStr}
+            </span>
+          </div>`;
+      } catch {
+        contenedor.innerHTML = `
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="status-dot mock"></span>
+            <span style="font-size:0.7rem; color:var(--gold);">Esperando primer dato del robot de GitHub...</span>
+          </div>`;
       }
     }
 
+    // -------------------------------------------------------------------------
+    // AUTORELLENO DESDE BOYA
+    // -------------------------------------------------------------------------
+    async function fillFormFromBCN() {
+      const fecha = document.getElementById('input-date').value;
+      const hora  = document.getElementById('input-time').value;
+      const btn   = document.getElementById('btn-autofill');
+      if (!fecha || !hora) return showToast('Selecciona fecha y hora primero', true);
+      btn.disabled = true;
+      btn.textContent = '⏳ Buscando en Supabase...';
+      try {
+        const targetMs = new Date(`${fecha}T${hora}:00`).getTime();
+        const minDate  = new Date(targetMs - 48 * 3600000).toISOString();
+        const maxDate  = new Date(targetMs + 48 * 3600000).toISOString();
+        const { data, error } = await supabaseClient.from('boya_barcelona').select('*')
+          .gte('fecha_oficial', minDate).lte('fecha_oficial', maxDate);
+        if (error || !data || !data.length) throw new Error('Sin datos');
+        let closest = data[0], minDiff = Math.abs(targetMs - new Date(closest.fecha_oficial).getTime());
+        for (const d of data) {
+          const diff = Math.abs(targetMs - new Date(d.fecha_oficial).getTime());
+          if (diff < minDiff) { minDiff = diff; closest = d; }
+        }
+        if (closest.hs   !== null) document.getElementById('input-wave-height').value = closest.hs;
+        if (closest.hmax !== null) document.getElementById('input-wave-max').value    = closest.hmax;
+        if (closest.tp   !== null) document.getElementById('input-period').value      = closest.tp;
+        if (closest.dir)           document.getElementById('input-sea-dir').value     = closest.dir;
+        const diffMin = Math.round(minDiff / 60000);
+        showToast(diffMin <= 30 ? 'Datos exactos cargados 📡' : `Datos cercanos (${diffMin} min dif.)`);
+      } catch {
+        showToast('No hay datos guardados para esa fecha', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '📡 Rellenar con historial de Supabase';
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // GRAFICA ESTADISTICAS
+    // -------------------------------------------------------------------------
+    async function renderChart() {
+      const { data, error } = await supabaseClient.from('sessions').select('waveHeight, period');
+      if (error || !data || !data.length) return;
+      const conteo = {};
+      data.forEach(s => {
+        if (s.waveHeight && s.period) {
+          const k = `${s.waveHeight}-${s.period}`;
+          if (!conteo[k]) conteo[k] = { x: s.period, y: s.waveHeight, r: 0 };
+          conteo[k].r += 6;
+        }
+      });
+      const ctx = document.getElementById('surfChart').getContext('2d');
+      if (surfChartInstance) surfChartInstance.destroy();
+      surfChartInstance = new Chart(ctx, {
+        type: 'bubble',
+        data: { datasets: [{ label:'Baños registrados', data:Object.values(conteo), backgroundColor:'rgba(20,184,166,0.6)', borderColor:'rgba(20,184,166,1)', borderWidth:1 }] },
+        options: {
+          responsive:true, maintainAspectRatio:false,
+          scales: {
+            x: { title:{ display:true, text:'Periodo (s)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' } },
+            y: { title:{ display:true, text:'Altura (m)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' } },
+          },
+          plugins:{ legend:{ display:false } }
+        }
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // GUARDAR SESION
+    // -------------------------------------------------------------------------
+    async function submitSession() {
+      const surferName = document.getElementById('input-surfer').value.trim() || 'Anónimo';
+      const session = {
+        spot:        document.getElementById('input-spot').value,
+        surfer_name: surferName,
+        datetime:    document.getElementById('input-date').value + 'T' + document.getElementById('input-time').value,
+        rating:      currentRating,
+        waveHeight:  parseFloat(document.getElementById('input-wave-height').value),
+        waveMax:     parseFloat(document.getElementById('input-wave-max').value) || null,
+        period:      parseFloat(document.getElementById('input-period').value),
+        seaDir:      document.getElementById('input-sea-dir').value,
+        windDir:     document.getElementById('input-wind-dir').value,
+        windForce:   document.getElementById('input-wind-force').value.trim() || null,
+        notes:       document.getElementById('input-notes').value,
+      };
+      if (!session.spot || !currentRating) return showToast('Falta spot o puntuación', true);
+      localStorage.setItem('wavelog_username', surferName);
+      const { error } = await supabaseClient.from('sessions').insert([session]);
+      if (error) { showToast('Error al guardar', true); return; }
+      showToast('¡Guardado en el grupo! 🤙');
+      document.getElementById('input-spot').value     = '';
+      document.getElementById('input-notes').value    = '';
+      document.getElementById('input-wind-dir').value = '';
+      document.getElementById('input-wind-force').value = '';
+      setRating(0);
+    }
+
+    // -------------------------------------------------------------------------
+    // HISTORIAL DEL GRUPO
+    // -------------------------------------------------------------------------
+    async function renderSessions() {
+      const container = document.getElementById('sessions-list');
+      container.innerHTML = '<p class="text-xs text-slate-500">Cargando...</p>';
+      const { data, error } = await supabaseClient.from('sessions').select('*').order('datetime', { ascending:false });
+      if (error || !data) return container.innerHTML = '<p>Error al cargar</p>';
+      if (!data.length)   return container.innerHTML = '<p class="text-xs text-slate-500">Aún no hay baños.</p>';
+      container.innerHTML = data.map(s => {
+        const name    = s.surfer_name || 'Anónimo';
+        const windTag = s.windDir ? `<span class="condition-tag">💨 ${s.windDir}${s.windForce ? ' ' + s.windForce + 'kt' : ''}</span>` : '';
+        const hmaxTag = s.waveMax ? `<span class="condition-tag">🌊 Hmax ${s.waveMax}m</span>` : '';
+        return `<div class="session-card">
+          <button class="delete-btn" onclick="deleteSession('${s.id}')">✕</button>
+          <div class="flex justify-between items-start mb-1">
+            <div class="session-spot">${s.spot} <span class="session-surfer">por ${name}</span></div>
+            <div class="text-amber-400 text-xs">${'★'.repeat(s.rating)}</div>
+          </div>
+          <div class="session-date">${new Date(s.datetime).toLocaleDateString('es-ES')}</div>
+          <div>
+            <span class="condition-tag">🌊 Hs ${s.waveHeight}m</span>
+            ${hmaxTag}
+            <span class="condition-tag">⏱ ${s.period}s</span>
+            <span class="condition-tag">🧭 ${s.seaDir}</span>
+            ${windTag}
+          </div>
+          ${s.notes ? `<p class="text-[10px] text-slate-400 mt-2 italic">"${s.notes}"</p>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    async function deleteSession(id) {
+      if (!confirm('¿Borrar este baño para todos?')) return;
+      await supabaseClient.from('sessions').delete().eq('id', id);
+      renderSessions();
+    }
+
     // =========================================================================
-    // EL ORÁCULO (PRONÓSTICO)
+    // EL ORACULO — RENDERIZADO COMPLETO
     // =========================================================================
-    async function fetchOracle() {
-      const now = new Date().toISOString();
+
+    function starsHtml(q) {
+      const filled = '★'.repeat(q);
+      const empty  = '☆'.repeat(5 - q);
+      const colors = { 5:'var(--gold)', 4:'var(--teal-light)', 3:'var(--sky)', 2:'var(--muted)', 1:'#f87171' };
+      return `<span style="color:${colors[q] || '#888'}">${filled}</span><span style="color:rgba(255,255,255,0.15)">${empty}</span>`;
+    }
+
+    function badgeClase(maxQ) {
+      if (maxQ >= 5) return 'q5';
+      if (maxQ >= 4) return 'q4';
+      if (maxQ >= 3) return 'q3';
+      if (maxQ >= 2) return 'q2';
+      return 'q1';
+    }
+
+    function badgeTexto(maxQ) {
+      if (maxQ >= 5) return '🏆 OLAS OPTIMAS';
+      if (maxQ >= 4) return '✅ BUENAS OLAS';
+      if (maxQ >= 3) return '🤙 SURFEABLE';
+      if (maxQ >= 2) return '😐 FLOJITO';
+      return '🏠 QUÉDATE EN CASA';
+    }
+
+    function franjaLabel(h) {
+      if (h >= 7  && h < 10) return 'AMANECER';
+      if (h >= 10 && h < 14) return 'MAÑANA';
+      if (h >= 14 && h < 18) return 'TARDE';
+      if (h >= 18)           return 'ATARDECER';
+      return 'NOCHE';
+    }
+
+    function franjaIcon(label) {
+      const m = { 'AMANECER':'🌅', 'MAÑANA':'☀️', 'TARDE':'🌞', 'ATARDECER':'🌇', 'NOCHE':'🌙' };
+      return m[label] || '🌊';
+    }
+
+    function modelBar(label, val, maxVal, color) {
+      if (val === null || val === undefined) return '';
+      const w = maxVal > 0 ? Math.round((val / maxVal) * 100) : 0;
+      return `<div class="model-bar-row">
+        <div class="model-bar-label">${label}</div>
+        <div class="model-bar-track">
+          <div class="model-bar-fill" style="width:${w}px; max-width:100%; background:${color};"></div>
+        </div>
+        <div class="model-bar-val">${val.toFixed(2)}m</div>
+      </div>`;
+    }
+
+    async function renderOracle() {
+      const contentEl = document.getElementById('oracle-content');
+
+      // Solo recargamos si no tenemos datos o si han pasado mas de 30 min
+      if (!oracleData) {
+        contentEl.innerHTML = `<div class="oracle-empty"><div class="big-icon">⏳</div><h3>Consultando el Oráculo...</h3></div>`;
+        await loadOracleData();
+      }
+
+      if (!oracleData || oracleData.length === 0) {
+        contentEl.innerHTML = `
+          <div class="oracle-empty">
+            <div class="big-icon">🔮</div>
+            <h3>El Oráculo aún no ha hablado</h3>
+            <p>El robot de GitHub Actions se ejecuta todos los días a las 06:00 UTC.<br>
+               Asegúrate de haber configurado el workflow y de que el modelo esté entrenado.</p>
+          </div>`;
+        return;
+      }
+
+      // Construir selector de dias
+      const dias = [...new Set(oracleData.map(f => f.forecast_date))].sort().slice(0, 3);
+      buildDayTabs(dias);
+
+      // Renderizar el dia seleccionado
+      renderDay(dias[oracleSelectedDay] || dias[0]);
+
+      // Badge de actualizacion
+      const ultimoCreado = oracleData.reduce((latest, f) =>
+        new Date(f.created_at) > new Date(latest) ? f.created_at : latest,
+        oracleData[0].created_at
+      );
+      const badge = document.getElementById('oracle-update-badge');
+      badge.style.display = 'flex';
+      document.getElementById('oracle-update-time').textContent =
+        '🤖 Actualizado ' + new Date(ultimoCreado).toLocaleString('es-ES', { dateStyle:'short', timeStyle:'short' });
+    }
+
+    async function loadOracleData() {
+      const hoy = new Date().toISOString().split('T')[0];
       const { data, error } = await supabaseClient
         .from('forecast_ai')
         .select('*')
-        .gte('timestamp', now)
-        .order('timestamp', { ascending: true })
-        .limit(48);
+        .gte('forecast_date', hoy)
+        .order('forecast_date', { ascending: true })
+        .order('forecast_hour', { ascending: true });
 
-      if (error) {
-        adminLog("Error Oracle: " + error.message);
-        return;
-      }
-      oracleData = data;
-      renderOracle();
+      if (!error && data) oracleData = data;
     }
 
-    function renderOracle() {
-      if (!oracleData) return;
-      const grid = document.getElementById('oracle-grid');
-      
-      // Agrupamos por días
-      const days = {};
-      oracleData.forEach(f => {
-        const d = f.forecast_date;
-        if (!days[d]) days[d] = [];
-        days[d].push(f);
+    function buildDayTabs(dias) {
+      const container = document.getElementById('day-tabs');
+      const hoy  = new Date();
+      const labels = dias.map(d => {
+        const dt   = new Date(d + 'T12:00:00');
+        const diff = Math.round((dt - hoy) / 86400000);
+        if (diff === 0) return 'HOY';
+        if (diff === 1) return 'MAÑANA';
+        return dt.toLocaleDateString('es-ES', { weekday:'short' }).toUpperCase();
       });
 
-      let html = '';
-      Object.keys(days).forEach(date => {
-        html += `<div class="col-span-full mt-8 mb-2 px-2 flex items-center gap-4">
-                  <h4 class="font-syne font-800 text-xs uppercase tracking-[0.2em] text-teal-500">${formatDateLabel(date)}</h4>
-                  <div class="h-[1px] flex-1 bg-white/5"></div>
-                 </div>`;
-        
-        days[date].forEach(f => {
-          html += renderForecastCard(f);
+      container.innerHTML = dias.map((d, i) => `
+        <button class="day-tab ${i === oracleSelectedDay ? 'active' : ''}"
+                onclick="selectDay(${i})">${labels[i]}<br>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">
+            ${new Date(d + 'T12:00:00').toLocaleDateString('es-ES', { day:'numeric', month:'short' })}
+          </span>
+        </button>`
+      ).join('');
+    }
+
+    function selectDay(idx) {
+      oracleSelectedDay = idx;
+      const dias = [...new Set(oracleData.map(f => f.forecast_date))].sort().slice(0, 3);
+      buildDayTabs(dias);
+      renderDay(dias[idx] || dias[0]);
+    }
+
+    function renderDay(fecha) {
+      const contentEl = document.getElementById('oracle-content');
+      const horasDelDia = oracleData.filter(f => f.forecast_date === fecha && f.forecast_hour >= 7 && f.forecast_hour <= 20);
+
+      if (!horasDelDia.length) {
+        contentEl.innerHTML = `<div class="oracle-empty"><div class="big-icon">🌙</div><h3>Sin datos para este día</h3></div>`;
+        return;
+      }
+
+      const maxQ   = Math.max(...horasDelDia.map(f => f.quality_score || 1));
+      const maxHs  = Math.max(...horasDelDia.map(f => f.hs_ai || 0), 0.1);
+      const mejorH = horasDelDia.reduce((b, f) => (f.quality_score || 0) > (b.quality_score || 0) ? f : b, horasDelDia[0]);
+
+      const franjas = ['AMANECER', 'MAÑANA', 'TARDE', 'ATARDECER'];
+      const grupos  = {};
+      horasDelDia.forEach(f => {
+        const fr = franjaLabel(f.forecast_hour);
+        if (!grupos[fr]) grupos[fr] = [];
+        grupos[fr].push(f);
+      });
+
+      let html = `
+        <div class="oracle-day-header">
+          <div class="oracle-day-title">${new Date(fecha + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' })}</div>
+        </div>
+        <div class="day-quality-badge ${badgeClase(maxQ)}">${badgeTexto(maxQ)}</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); margin-bottom:16px;">
+          Mejor ventana: <span style="color:#fff;">${String(mejorH.forecast_hour).padStart(2,'0')}:00h — ${(mejorH.hs_ai || 0).toFixed(2)}m</span>
+        </div>`;
+
+      // Construir cada franja con sus tarjetas de hora
+      franjas.forEach(fr => {
+        const horas = grupos[fr];
+        if (!horas || !horas.length) return;
+
+        html += `<div class="franja-header">${franjaIcon(fr)} ${fr}</div>`;
+
+        horas.forEach(f => {
+          const esMejor = f === mejorH;
+          const allMs   = [f.ibi_hs, f.ecmwf_hs, f.gfs_hs, f.icon_hs].filter(v => v !== null);
+          const globalMax = Math.max(...allMs, f.hs_ai || 0, 0.1);
+          const q = f.quality_score || 1;
+
+          html += `
+            <div class="hora-card ${esMejor ? 'best-window' : ''}">
+              <div class="hora-time">${String(f.forecast_hour).padStart(2,'0')}h ${esMejor ? '⭐' : ''}</div>
+              <div class="hora-main">
+                <div class="hora-hs">${(f.hs_ai || 0).toFixed(2)}<span>m IA</span></div>
+                <div class="hora-models" style="margin-top:6px;">
+                  ${modelBar('IBI',  f.ibi_hs,   globalMax, '#14b8a6')}
+                  ${modelBar('ECM',  f.ecmwf_hs, globalMax, '#0ea5e9')}
+                  ${modelBar('GFS',  f.gfs_hs,   globalMax, '#7c3aed')}
+                  ${modelBar('ICON', f.icon_hs,  globalMax, '#f59e0b')}
+                </div>
+              </div>
+              <div class="hora-meta">
+                <div class="hora-stars">${starsHtml(q)}</div>
+                ${f.tp_ai   ? `<div style="margin-top:4px;">Tp ${f.tp_ai}s</div>` : ''}
+                ${f.dir_ai  ? `<div>${f.dir_ai}</div>` : ''}
+              </div>
+            </div>`;
         });
       });
 
-      grid.innerHTML = html;
-    }
-
-    function renderForecastCard(f) {
-      const q = f.quality_score || 3;
-      const hs = f.hs_ai || 0;
-      const time = String(f.forecast_hour).padStart(2, '0') + ':00';
-      
-      // Cálculo de escala para las barras
-      const maxVal = 2.0; 
-      const getW = (v) => Math.min((v / maxVal) * 100, 100) + '%';
-
-      return `
-        <div class="glass rounded-2xl p-5 flex flex-col justify-between transition-all hover:border-teal-500/40 group">
-          <div class="flex justify-between items-start mb-4">
-            <div>
-              <div class="text-[10px] font-mono text-muted uppercase tracking-widest">${time}</div>
-              <div class="font-syne text-2xl font-800 text-white group-hover:text-teal-400 transition-colors">${hs.toFixed(2)}m</div>
-            </div>
-            <div class="text-right">
-              <div class="flex gap-0.5 mb-1">${'⭐'.repeat(q)}</div>
-              <div class="text-[10px] font-mono text-muted uppercase">${f.tp_ai || 0}s | ${f.dir_ai || 0}°</div>
-            </div>
-          </div>
-          
-          <div class="space-y-2">
-            ${renderMiniBar('IBI', f.ibi_hs, '#14b8a6', getW(f.ibi_hs))}
-            ${renderMiniBar('ECM', f.ecmwf_hs, '#0ea5e9', getW(f.ecmwf_hs))}
-            ${renderMiniBar('GFS', f.gfs_hs, '#7c3aed', getW(f.gfs_hs))}
-            ${renderMiniBar('ICO', f.icon_hs, '#f59e0b', getW(f.icon_hs))}
-          </div>
-        </div>
-      `;
-    }
-
-    function renderMiniBar(label, val, color, width) {
-      return `
-        <div class="flex items-center gap-3">
-          <div class="text-[8px] font-mono text-muted w-6">${label}</div>
-          <div class="flex-1 h-1 bg-white/5 rounded-full overflow-hidden">
-            <div class="h-full rounded-full" style="width: ${width}; background: ${color}; opacity: 0.8"></div>
-          </div>
-          <div class="text-[8px] font-mono text-white/40 w-6 text-right">${val?.toFixed(1) || 0}</div>
-        </div>
-      `;
+      contentEl.innerHTML = html;
     }
 
     // =========================================================================
-    // DIARIO DE SESIONES
-    // =========================================================================
-    async function saveSession() {
-      const session = {
-        surfer_name: document.getElementById('input-surfer').value,
-        datetime: `${document.getElementById('input-date').value}T${document.getElementById('input-time').value}`,
-        waveHeight: parseFloat(document.getElementById('input-hs').value),
-        rating: parseInt(document.getElementById('input-rating').value),
-        spot: document.getElementById('input-spot').value,
-        notes: document.getElementById('input-notes').value
-      };
-
-      if (!session.surfer_name || isNaN(session.waveHeight)) {
-        showToast("Faltan campos obligatorios", true);
-        return;
-      }
-
-      const { error } = await supabaseClient.from('sessions').insert([session]);
-      if (error) {
-        showToast("Error al guardar", true);
-        adminLog("Error Guardar: " + error.message);
-      } else {
-        showToast("Sesión guardada en el WaveLog");
-        localStorage.setItem('wavelog_username', session.surfer_name);
-        fetchSessions();
-        // Reset campos
-        document.getElementById('input-hs').value = '';
-        document.getElementById('input-notes').value = '';
-      }
-    }
-
-    async function fetchSessions() {
-      const { data, error } = await supabaseClient
-        .from('sessions')
-        .select('*')
-        .order('datetime', { ascending: false })
-        .limit(10);
-
-      if (error) return;
-      const list = document.getElementById('sessions-list');
-      list.innerHTML = data.map(s => `
-        <div class="glass rounded-2xl p-5 border-l-4 border-l-teal-500">
-          <div class="flex justify-between items-start mb-2">
-            <div>
-              <span class="font-syne font-700 text-sm">${s.surfer_name}</span>
-              <span class="text-[10px] text-muted font-mono ml-2 uppercase">${new Date(s.datetime).toLocaleDateString()}</span>
-            </div>
-            <div class="text-teal-400 font-syne font-800">${s.waveHeight.toFixed(1)}m</div>
-          </div>
-          <div class="text-xs text-slate-300 mb-3">${'⭐'.repeat(s.rating)} en ${s.spot}</div>
-          <p class="text-xs text-muted italic font-dm leading-relaxed">"${s.notes || 'Sin comentarios.'}"</p>
-        </div>
-      `).join('');
-    }
-
-    // =========================================================================
-    // ADMIN
+    // PANEL ADMIN (simplificado)
     // =========================================================================
     function adminLog(msg) {
-      const log = document.getElementById('admin-log');
-      const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
-      log.innerHTML = `> [${time}] ${msg}<br>` + log.innerHTML;
+      const box = document.getElementById('admin-log');
+      box.textContent += '[' + new Date().toLocaleTimeString('es-ES') + '] ' + msg + '\n';
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function adminVerEstado() {
+      adminLog('Consultando ai_weights...');
+      const { data, error } = await supabaseClient.from('ai_weights').select('*').order('created_at', { ascending:false }).limit(1);
+      if (error) { adminLog('ERROR: ' + error.message); return; }
+      if (!data || !data.length) { adminLog('Sin modelos en ai_weights. Entrena primero.'); return; }
+      const m = data[0];
+      adminLog(`Modelo activo: #${m.id}`);
+      adminLog(`  RMSE: ${m.rmse ? m.rmse.toFixed(4) : '—'} m`);
+      adminLog(`  R2:   ${m.r_squared ? m.r_squared.toFixed(4) : '—'}`);
+      adminLog(`  Muestras: ${m.training_samples || '—'}`);
+      adminLog(`  Entrenado: ${new Date(m.created_at).toLocaleString('es-ES')}`);
+      Object.entries(m.weights || {}).forEach(([k, v]) => adminLog(`  ${k}: ${v.toFixed(5)}`));
+    }
+
+    async function adminForzarOracle() {
+      adminLog('Intentando leer pesos y pronosticos existentes...');
+      await adminVerEstado();
+      const { data } = await supabaseClient.from('forecast_ai').select('forecast_date, hs_ai').order('created_at', { ascending:false }).limit(3);
+      if (data) data.forEach(f => adminLog(`forecast_ai: ${f.forecast_date} hs_ai=${f.hs_ai}m`));
+      adminLog('Para ejecutar el Oracle completo, usa GitHub Actions.');
     }
 
     async function adminLimpiarForecast() {
-      if (!confirm('Borrar todos los pronósticos anteriores a hoy. Esta acción es irreversible.')) return;
+      if (!confirm('Borrar todos los pronosticos anteriores a hoy. Esta accion es irreversible.')) return;
       const hoy = new Date().toISOString().split('T')[0];
       const { error } = await supabaseClient.from('forecast_ai').delete().lt('forecast_date', hoy);
       if (error) adminLog('ERROR: ' + error.message);
       else {
-        adminLog('Pronósticos antiguos eliminados.');
-        fetchOracle();
+        adminLog('Pronosticos antiguos eliminados.');
+        oracleData = null; // Forzar recarga
       }
     }
 
     // =========================================================================
     // UTILIDADES
     // =========================================================================
-    function formatDateLabel(dateStr) {
-      const options = { weekday: 'long', day: 'numeric', month: 'short' };
-      const d = new Date(dateStr);
-      return d.toLocaleDateString('es-ES', options);
-    }
-
     function showToast(msg, isError) {
       const t = document.getElementById('toast');
       t.textContent = msg;
@@ -405,15 +790,15 @@
       setTimeout(() => t.classList.remove('show'), 3000);
     }
 
-    // INICIALIZACIÓN
+    // =========================================================================
+    // INICIALIZACION
+    // =========================================================================
     const savedName = localStorage.getItem('wavelog_username');
     if (savedName) document.getElementById('input-surfer').value = savedName;
     document.getElementById('input-date').value = new Date().toISOString().split('T')[0];
     document.getElementById('input-time').value = new Date().toTimeString().slice(0, 5);
 
     fetchPortusData();
-    fetchOracle();
-    setInterval(fetchPortusData, 300000); // Actualizar boya cada 5 min
   </script>
 </body>
 </html>
