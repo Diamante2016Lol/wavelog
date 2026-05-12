@@ -1,61 +1,23 @@
-# ===========================================================================
-# .github/workflows/oracle.yml
-#
-# Coloca este archivo en tu repositorio en la ruta:
-#   .github/workflows/oracle.yml
-#
-# El robot del Oraculo se ejecutara automaticamente cada dia a las 06:00 UTC
-# (equivalente a 07:00 en invierno o 08:00 en verano, hora espanola)
-#
-# ANTES DE ACTIVARLO:
-#   1. Ve a tu repositorio en GitHub
-#   2. Settings -> Secrets and variables -> Actions
-#   3. Crea dos secretos:
-#       - SUPABASE_URL        : tu URL de Supabase (ej. https://xxx.supabase.co)
-#       - SUPABASE_SERVICE_KEY: tu Service Role Key (NO la anon key)
-#
-# Puedes lanzarlo manualmente desde la pestana "Actions" con el boton
-# "Run workflow" (gracias al trigger workflow_dispatch)
-# ===========================================================================
-
 name: WaveLog Oracle — Pronostico Diario
-
 on:
-  # Ejecucion automatica a las 06:00 UTC cada dia
   schedule:
     - cron: '0 6 * * *'
-
-  # Ejecucion manual desde la interfaz de GitHub Actions
   workflow_dispatch:
-
 jobs:
   run-oracle:
     name: Calcular y guardar pronostico IA
     runs-on: ubuntu-latest
-
     steps:
-      # Descarga el codigo del repositorio
       - name: Checkout del repositorio
         uses: actions/checkout@v4
-
-      # Instala Node.js 20 (soporte nativo de fetch, ESM y modulos modernos)
       - name: Configurar Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # Instala la dependencia de Supabase
       - name: Instalar dependencias
         run: npm install @supabase/supabase-js
-
-      # Ejecuta el Oraculo con las credenciales secretas
       - name: Ejecutar Oracle
-        run: node oracle.mjs
         env:
-          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-
-      # Confirmacion en el log de Actions
-      - name: Resultado
-        if: success()
-        run: echo "Oraculo ejecutado con exito. Pronostico actualizado en Supabase."
+        run: node oracle.mjs
