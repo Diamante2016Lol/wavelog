@@ -1,7 +1,8 @@
 name: WaveLog Oracle — Pronostico Diario
 on:
   schedule:
-    - cron: '0 6 * * *'
+    # Se ejecuta a las 07:00 UTC y 17:00 UTC (09:00 y 19:00 en España)
+    - cron: '0 7,17 * * *'
   workflow_dispatch:
 jobs:
   run-oracle:
