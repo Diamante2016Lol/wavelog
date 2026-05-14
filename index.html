@@ -140,6 +140,10 @@
     .day-quality-badge.q3 { background:rgba(14,165,233,0.1);  border-color:rgba(14,165,233,0.3);  color:var(--sky); }
     .day-quality-badge.q2 { background:rgba(74,122,138,0.12); border-color:rgba(74,122,138,0.3);  color:var(--muted); }
     .day-quality-badge.q1 { background:rgba(239,68,68,0.08);  border-color:rgba(239,68,68,0.2);   color:#f87171; }
+    .day-quality-badge.q0 { background:rgba(30,30,50,0.25);   border-color:rgba(100,100,130,0.2); color:rgba(148,163,184,0.5); }
+
+    /* Tarjeta de hora con 0 estrellas (flat) — apagada visualmente */
+    .hora-card.flat { opacity:0.45; filter:grayscale(0.6); }
 
     /* Separador de franja horaria */
     .franja-header { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:0.18em;
@@ -545,6 +549,7 @@
     // =========================================================================
 
     function starsHtml(q) {
+      if (q === 0) return `<span style="color:rgba(148,163,184,0.35); font-size:0.58rem; letter-spacing:0.05em;">FLAT</span>`;
       const filled = '★'.repeat(q);
       const empty  = '☆'.repeat(5 - q);
       const colors = { 5:'var(--gold)', 4:'var(--teal-light)', 3:'var(--sky)', 2:'var(--muted)', 1:'#f87171' };
@@ -556,15 +561,17 @@
       if (maxQ >= 4) return 'q4';
       if (maxQ >= 3) return 'q3';
       if (maxQ >= 2) return 'q2';
-      return 'q1';
+      if (maxQ >= 1) return 'q1';
+      return 'q0';
     }
 
     function badgeTexto(maxQ) {
-      if (maxQ >= 5) return '🏆 OLAS OPTIMAS';
+      if (maxQ >= 5) return '🏆 OLAS ÓPTIMAS';
       if (maxQ >= 4) return '✅ BUENAS OLAS';
       if (maxQ >= 3) return '🤙 SURFEABLE';
       if (maxQ >= 2) return '😐 FLOJITO';
-      return '🏠 QUÉDATE EN CASA';
+      if (maxQ >= 1) return '🏠 QUÉDATE EN CASA';
+      return '💤 FLAT';
     }
 
     function franjaLabel(h) {
@@ -714,7 +721,7 @@
           const q = f.quality_score || 1;
 
           html += `
-            <div class="hora-card ${esMejor ? 'best-window' : ''}">
+            <div class="hora-card ${esMejor ? 'best-window' : ''} ${q === 0 ? 'flat' : ''}">
               <div class="hora-time">${String(f.forecast_hour).padStart(2,'0')}h ${esMejor ? '⭐' : ''}</div>
               <div class="hora-main">
                 <div class="hora-hs">${(f.hs_ai || 0).toFixed(2)}<span>m IA</span></div>
