@@ -80,7 +80,7 @@ async function run() {
   if (wError) console.warn('Aviso al cargar pesos:', wError.message);
 
   // Pesos por defecto si la IA aún no ha sido entrenada con los 4 modelos
-  const defaultWeights = { hs_ibi: 0.25, hs_ecmwf: 0.35, hs_gfs: 0.25, hs_icon: 0.15, bias: 0 };
+  const defaultWeights = { hs_ibi: 0, hs_ecmwf: 1, hs_gfs: 0, hs_icon: 0, bias: 0 }; // ECMWF tal cual
   const pesosPorVentana = wData?.[0]?.weights || {
     NE: defaultWeights, E: defaultWeights, SE: defaultWeights,
     S:  defaultWeights, SW: defaultWeights,
@@ -112,8 +112,9 @@ async function run() {
     const conf    = pesosPorVentana[ventana] || defaultWeights;
 
     // ── LÓGICA CONDICIONAL DE HS_FINAL ──────────────────────────────────────
+    // Misma condición que usa el entrenador (scripts/entrenar.mjs): ECMWF o GFS > umbral
     const modelosBrutos = [ibi, ecmwf, gfs, icon];
-    const algunoSuperaUmbral = modelosBrutos.some(v => v > UMBRAL_IA);
+    const algunoSuperaUmbral = Math.max(ecmwf, gfs) > UMBRAL_IA;
 
     let hs_final;
     let metodo;
@@ -129,12 +130,12 @@ async function run() {
       metodo = 'AI';
       horasConIA++;
     } else {
-      // ⚡ Ningún modelo supera 0.8m → media aritmética de los modelos con valor > 0
-      //    Evita distorsionar el promedio con ceros de modelos sin dato.
+      // ⚡ Por debajo del umbral → ECMWF tal cual (en el backtest de 92 días fue el
+      //    modelo con menos error). Si ECMWF no tiene dato, media de los que haya.
       const valoresValidos = modelosBrutos.filter(v => v > 0);
-      hs_final = valoresValidos.length > 0
-        ? valoresValidos.reduce((acc, v) => acc + v, 0) / valoresValidos.length
-        : 0;
+      hs_final = ecmwf > 0
+        ? ecmwf
+        : (valoresValidos.length > 0 ? valoresValidos.reduce((acc, v) => acc + v, 0) / valoresValidos.length : 0);
       metodo = 'AVG';
       horasConMedia++;
     }

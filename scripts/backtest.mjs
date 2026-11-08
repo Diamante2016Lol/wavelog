@@ -70,10 +70,11 @@ const modeloId = wData?.[0]?.id ?? 'default';
 
 function combinar(vals, conf) {
   const [ibi, ecmwf, gfs, icon] = vals.map(v => v || 0);
-  if ([ibi, ecmwf, gfs, icon].some(v => v > UMBRAL_IA)) {
+  if (Math.max(ecmwf, gfs) > UMBRAL_IA) {   // misma lógica que oracle.mjs
     return Math.max(0, ibi * (conf.hs_ibi || 0) + ecmwf * (conf.hs_ecmwf || 0)
       + gfs * (conf.hs_gfs || 0) + icon * (conf.hs_icon || 0) + (conf.bias || 0));
   }
+  if (ecmwf > 0) return ecmwf;
   const v = [ibi, ecmwf, gfs, icon].filter(x => x > 0);
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 }
