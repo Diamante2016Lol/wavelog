@@ -313,6 +313,17 @@
     </section>
 
     <section id="panel-oracle" class="panel">
+      <div class="glass-card" style="margin-bottom:14px;">
+        <div class="section-title">📊 Spread ECMWF ENS — próximos días</div>
+        <div class="verif-controls" id="ens-puntos"></div>
+        <div id="ens-status" class="verif-note" style="margin-bottom:8px;">Cargando ensemble...</div>
+        <div style="position:relative; height:260px; width:100%;"><canvas id="ensChart"></canvas></div>
+        <div id="ens-table" style="overflow-x:auto;"></div>
+        <p class="verif-note" style="margin-top:8px;">
+          50 miembros del ECMWF WAM ensemble (0.25°). Las celdas pegadas a la costa salen como tierra: Castelldefels y Barcelona son las más cercanas con dato. Se actualiza con cada run nuevo (cada 6 h). Banda clara = P10–P90, banda oscura = P25–P75, línea = mediana.
+          Spread = P90 − P10 de la Hs máxima de cada miembro entre 07 y 20 h. Dirección = de dónde viene el mar (media circular de los miembros); ± = cuánto discrepan. Cuanto más ancho, menos fiable es el pronóstico.
+        </p>
+      </div>
       <div class="glass-card">
         <div class="section-title">🔮 El Oráculo — IA Forecaster</div>
 
@@ -331,6 +342,7 @@
           </div>
         </div>
       </div>
+
     </section>
 
     <section id="panel-spots" class="panel">
@@ -937,8 +949,9 @@
       // Solo recargamos si no tenemos datos o si han pasado mas de 30 min
       if (!oracleData) {
         contentEl.innerHTML = `<div class="oracle-empty"><div class="big-icon">⏳</div><h3>Consultando el Oráculo...</h3></div>`;
-        await loadOracleData();
+        await Promise.all([loadOracleData(), loadEns()]);
       }
+      renderEns();
 
       if (!oracleData || oracleData.length === 0) {
         contentEl.innerHTML = `
@@ -967,6 +980,177 @@
       badge.style.display = 'flex';
       document.getElementById('oracle-update-time').textContent =
         '🤖 Actualizado ' + new Date(ultimoCreado).toLocaleString('es-ES', { dateStyle:'short', timeStyle:'short' });
+    }
+
+    // -------------------------------------------------------------------------
+    // ECMWF ENS (WAM ensemble, 50 miembros) — spread de los próximos días
+    //   Viene de Supabase Storage: wavelog/ens.json (scripts/ens.py). Pasos de 3 h hasta +72 h, luego 6 h.
+    // -------------------------------------------------------------------------
+    const ENS_DIAS = 7;
+    let ensTodo = null;          // { run, puntos: { castefa:{...}, bcn:{...} } }
+    let ensData = null;          // punto elegido: { nombre, lat, lon, run, nMiembros, horas:[{ms,n,p10..p90,miembros}] }
+    let ensPunto = (() => { try { return localStorage.getItem('ensPunto') || 'castefa'; } catch { return 'castefa'; } })();
+    let ensChartInstance = null;
+
+    function ensQuantile(sorted, q) {
+      if (!sorted.length) return null;
+      const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+    }
+
+    async function loadEns() {
+      if (!ensTodo) {
+        // Lo genera scripts/ens.py (GitHub Actions) desde el open data de ECMWF
+        try {
+          const res = await fetch(`${SUPABASE_URL}/storage/v1/object/public/wavelog/ens.json?t=${Math.floor(Date.now() / 600000)}`);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const j = await res.json();
+          const desde = Date.now() - 3 * 3600000;
+          // Formato antiguo (un solo punto en j.horas) = Barcelona
+          const crudos = j.puntos || { bcn: { nombre:'Barcelona', lat:j.lat, lon:j.lon, horas:j.horas || [] } };
+          const puntos = {};
+          for (const [k, p] of Object.entries(crudos)) {
+            const horas = p.horas.map(r => ({ ms: verifToMs(r.valid_time), n: r.n, miembros: r.miembros || [],
+              p10: r.p10, p25: r.p25, p50: r.p50, p75: r.p75, p90: r.p90,
+              dirMedia: r.dir_media ?? null, dirDisp: r.dir_disp ?? null, dirs: r.dirs || [] })).filter(x => x.ms >= desde);
+            if (horas.length) puntos[k] = { nombre:p.nombre, lat:p.lat, lon:p.lon, run:j.run_time, horas,
+              nMiembros: Math.max(...horas.map(x => x.n)) };
+          }
+          if (Object.keys(puntos).length) ensTodo = { run: j.run_time, puntos };
+        } catch (e) { console.warn('ENS', e); }
+      }
+      if (!ensTodo) return null;
+      if (!ensTodo.puntos[ensPunto]) ensPunto = Object.keys(ensTodo.puntos)[0];
+      ensData = ensTodo.puntos[ensPunto];
+      return ensData;
+    }
+
+    // Dirección de procedencia (°, desde el N) -> flecha hacia donde va la ola + sector de 8
+    function ensDirHtml(dir, disp) {
+      if (dir == null) return '';
+      return `<span style="display:inline-block;transform:rotate(${dir}deg)">↓</span> ${Math.round(dir)}° ${verifVentana(dir)}`
+        + (disp != null ? ` <span style="color:var(--muted)">±${Math.round(disp)}°</span>` : '');
+    }
+
+    function ensDirMedia(dirs) {
+      const v = dirs.filter(d => d != null);
+      if (!v.length) return null;
+      const s = v.reduce((a, d) => a + Math.sin(d * Math.PI / 180), 0) / v.length;
+      const c = v.reduce((a, d) => a + Math.cos(d * Math.PI / 180), 0) / v.length;
+      const R = Math.min(1, Math.hypot(s, c));
+      return { media: ((Math.atan2(s, c) * 180 / Math.PI) + 360) % 360,
+               disp: R > 1e-9 ? Math.min(180, Math.sqrt(-2 * Math.log(R)) * 180 / Math.PI) : 180 };
+    }
+
+    function ensElegirPunto(k) {
+      ensPunto = k;
+      try { localStorage.setItem('ensPunto', k); } catch {}
+      renderEns();
+      // Las tarjetas horarias del oráculo también usan el punto elegido
+      if (oracleData && oracleData.length) {
+        const dias = [...new Set(oracleData.map(f => f.forecast_date))].sort().slice(0, 3);
+        renderDay(dias[oracleSelectedDay] || dias[0]);
+      }
+    }
+
+    function ensEnHora(ms) {
+      if (!ensData) return null;
+      // El ENS sale cada 3 h: si la hora exacta no está, la más cercana (±1 h)
+      const k = verifHourKey(ms);
+      let mejor = null;
+      for (const x of ensData.horas) {
+        const dk = Math.abs(verifHourKey(x.ms) - k);
+        if (dk <= 1 && (!mejor || dk < mejor.dk)) mejor = { dk, x };
+      }
+      return mejor ? mejor.x : null;
+    }
+
+    function ensConfianza(spread) {
+      if (spread < 0.3) return { txt:'Alta',  color:'var(--green)' };
+      if (spread < 0.6) return { txt:'Media', color:'var(--gold)' };
+      return               { txt:'Baja',  color:'var(--red)' };
+    }
+
+    async function renderEns() {
+      const statusEl = document.getElementById('ens-status');
+      const d = await loadEns();
+      if (!d) {
+        statusEl.innerHTML = '<span style="color:var(--gold)">Aún no hay datos del ENS (se generan a las 08:30 y 20:30 UTC).</span>';
+        return;
+      }
+      document.getElementById('ens-puntos').innerHTML = Object.entries(ensTodo.puntos).map(([k, p]) =>
+        `<button class="verif-btn ${k === ensPunto ? 'active' : ''}" onclick="ensElegirPunto('${k}')">${p.nombre}</button>`).join('');
+      const ahora = Date.now() - 3600000;
+      const horas = d.horas.filter(x => x.ms >= ahora);
+
+      // Línea de la IA WaveLog encima, si hay datos del oracle para esas horas
+      const iaPorHora = new Map((oracleData || []).map(f => [verifHourKey(verifToMs(f.timestamp)), f.hs_ai]));
+      const labels = horas.map(x => new Date(x.ms).toLocaleString('es-ES', { weekday:'short', day:'2-digit', hour:'2-digit', minute:'2-digit' }));
+      const r = v => v == null ? null : +v.toFixed(2);
+      const banda = (data, fill, color, label) => ({ label, data, fill, backgroundColor: color, borderWidth: 0, pointRadius: 0, spanGaps: true, tension: 0.3 });
+
+      const datasets = [
+        banda(horas.map(x => r(x.p90)), false, 'transparent', 'P90'),
+        banda(horas.map(x => r(x.p10)), '-1', 'rgba(14,165,233,0.16)', 'P10–P90'),
+        banda(horas.map(x => r(x.p75)), false, 'transparent', 'P75'),
+        banda(horas.map(x => r(x.p25)), '-1', 'rgba(14,165,233,0.32)', 'P25–P75'),
+        { label:'Mediana ENS', data: horas.map(x => r(x.p50)), borderColor:'#0ea5e9', backgroundColor:'#0ea5e9',
+          borderWidth:2, pointRadius:0, spanGaps:true, tension:0.3, fill:false },
+      ];
+      if (horas.some(x => iaPorHora.has(verifHourKey(x.ms)))) {
+        datasets.push({ label:'IA WaveLog', data: horas.map(x => r(iaPorHora.get(verifHourKey(x.ms)))),
+          borderColor:'#2dd4bf', backgroundColor:'#2dd4bf', borderWidth:2, borderDash:[4,3], pointRadius:0, spanGaps:false, tension:0.3, fill:false });
+      }
+
+      const ctx = document.getElementById('ensChart').getContext('2d');
+      if (ensChartInstance) ensChartInstance.destroy();
+      ensChartInstance = new Chart(ctx, {
+        type:'line', data:{ labels, datasets },
+        options:{
+          responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
+          scales:{
+            x:{ ticks:{ color:'#94a3b8', maxTicksLimit:7, maxRotation:0, font:{ size:9 } }, grid:{ color:'rgba(148,163,184,0.06)' } },
+            y:{ beginAtZero:true, title:{ display:true, text:'Hs (m)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' }, grid:{ color:'rgba(148,163,184,0.08)' } },
+          },
+          plugins:{
+            legend:{ labels:{ color:'#cbd5e1', boxWidth:12, font:{ size:10 }, filter: it => !['P90','P75'].includes(it.text) } },
+            tooltip:{ filter: it => !['P90','P75'].includes(it.dataset.label) },
+          },
+        },
+      });
+
+      // Resumen por día (horas de luz 07–20 h, hora local): Hs máxima de cada miembro
+      const porDia = new Map();
+      horas.forEach(x => {
+        const dt = new Date(x.ms), hLocal = dt.getHours();
+        if (hLocal < 7 || hLocal > 20) return;
+        const dia = dt.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
+        const dd = porDia.get(dia) || { maxs: [], dirs: [] };
+        x.miembros.forEach((v, i) => {
+          if (dd.maxs[i] == null || v > dd.maxs[i]) { dd.maxs[i] = v; dd.dirs[i] = x.dirs[i] ?? null; }
+        });
+        porDia.set(dia, dd);
+      });
+      const filas = [...porDia.entries()].sort().slice(0, ENS_DIAS).map(([dia, { maxs, dirs }]) => {
+        const s = maxs.filter(v => v != null).sort((a, b) => a - b);
+        const dir = ensDirMedia(dirs);
+        const p10 = ensQuantile(s, .1), p50 = ensQuantile(s, .5), p90 = ensQuantile(s, .9);
+        const prob1 = Math.round(100 * s.filter(v => v >= 1.0).length / s.length);
+        return { dia, p10, p50, p90, spread: p90 - p10, prob1, dir };
+      });
+
+      document.getElementById('ens-table').innerHTML = `
+        <table class="verif-table">
+          <tr><th>Día</th><th>Hs máx (P50)</th><th>P10–P90</th><th>Spread</th><th>Dir. en el pico</th><th>P(≥1 m)</th><th>Confianza</th></tr>
+          ${filas.map(f => {
+            const c = ensConfianza(f.spread);
+            const etiqueta = new Date(f.dia + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'short', day:'numeric' });
+            return `<tr><td>${etiqueta}</td><td>${f.p50.toFixed(2)}</td><td>${f.p10.toFixed(2)}–${f.p90.toFixed(2)}</td>
+              <td>${f.spread.toFixed(2)}</td><td style="white-space:nowrap">${f.dir ? ensDirHtml(f.dir.media, f.dir.disp) : '—'}</td><td>${f.prob1}%</td><td style="color:${c.color}">${c.txt}</td></tr>`;
+          }).join('')}
+        </table>`;
+
+      statusEl.textContent = `${d.nMiembros} miembros · run ${new Date(d.run).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })} · fuente: ECMWF open data (WAM ENS, celda ${d.lat}N ${d.lon}E)`;
     }
 
     async function loadOracleData() {
@@ -1051,6 +1235,7 @@
           const allMs   = [f.ibi_hs, f.ecmwf_hs, f.gfs_hs, f.icon_hs].filter(v => v !== null);
           const globalMax = Math.max(...allMs, f.hs_ai || 0, 0.1);
           const q = f.quality_score || 1;
+          const ens = ensEnHora(verifToMs(f.timestamp));
 
           html += `
             <div class="hora-card ${esMejor ? 'best-window' : ''} ${q === 0 ? 'flat' : ''}">
@@ -1066,6 +1251,7 @@
               </div>
               <div class="hora-meta">
                 <div class="hora-stars">${starsHtml(q)}</div>
+                ${ens ? `<div style="margin-top:4px;color:${ensConfianza(ens.p90 - ens.p10).color}" title="ECMWF ENS: mediana (P10–P90)">ENS ${ens.p50.toFixed(2)}m<br><span style="font-size:0.9em">${ens.p10.toFixed(1)}–${ens.p90.toFixed(1)}</span>${ens.dirMedia != null ? `<br><span style="font-size:0.9em;color:var(--foam)">${ensDirHtml(ens.dirMedia, ens.dirDisp)}</span>` : ''}</div>` : ''}
                 ${f.tp_ai   ? `<div style="margin-top:4px;">Tp ${f.tp_ai}s</div>` : ''}
                 ${f.dir_ai  ? `<div>${f.dir_ai}</div>` : ''}
               </div>

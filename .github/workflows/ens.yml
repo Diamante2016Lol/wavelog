@@ -1,0 +1,22 @@
+name: WaveLog ENS — Spread ECMWF
+on:
+  schedule:
+    # Cada hora: si ECMWF ha publicado un run nuevo (00/06/12/18z) lo baja;
+    # si no, sale en segundos. Así se pilla cada run en cuanto sale, aunque vaya tarde.
+    - cron: '20 * * * *'
+  workflow_dispatch:
+jobs:
+  ens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install eccodes numpy
+      - name: Descargar ENS y guardar en Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/ens.py
