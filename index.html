@@ -186,6 +186,19 @@
     .update-time { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:#c4b5fd; }
     .update-next { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); }
 
+    /* VERIFICACION */
+    .verif-controls { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
+    .verif-btn { flex:1; min-width:58px; padding:7px 6px; border-radius:10px; border:1px solid var(--card-border);
+      background:rgba(6,20,42,0.6); color:var(--muted); font-family:'JetBrains Mono',monospace; font-size:0.66rem; cursor:pointer; }
+    .verif-btn.active { color:#fff; background:linear-gradient(135deg,rgba(20,184,166,0.22),rgba(14,165,233,0.15)); border-color:rgba(20,184,166,0.5); }
+    .verif-table { width:100%; border-collapse:collapse; font-family:'JetBrains Mono',monospace; font-size:0.68rem; margin-top:8px; }
+    .verif-table th { color:var(--muted); font-weight:400; text-align:right; padding:5px 4px; border-bottom:1px solid var(--card-border); }
+    .verif-table th:first-child, .verif-table td:first-child { text-align:left; }
+    .verif-table td { text-align:right; padding:5px 4px; border-bottom:1px solid rgba(20,184,166,0.08); color:var(--foam); }
+    .verif-table td.best { color:var(--green); font-weight:600; }
+    .verif-sub { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:0.18em; text-transform:uppercase; color:var(--teal); margin:16px 0 2px; }
+    .verif-note { font-size:0.68rem; color:var(--muted); line-height:1.5; }
+
     /* ADMIN TAB (oculto por defecto) */
     #tab-admin { display:none; }
     .admin-card { background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.25); border-radius:16px; padding:18px; margin-bottom:14px; }
@@ -224,7 +237,7 @@
       <button class="tab-btn active" onclick="switchTab('log')"     id="tab-log">    <span>📝</span><span>Registrar</span></button>
       <button class="tab-btn"        onclick="switchTab('history')" id="tab-history"><span>🏄</span><span>Grupo</span></button>
       <button class="tab-btn"        onclick="switchTab('oracle')"  id="tab-oracle"> <span>🔮</span><span>Oráculo</span></button>
-      <button class="tab-btn"        onclick="switchTab('stats')"   id="tab-stats">  <span>📊</span><span>Gráfica</span></button>
+      <button class="tab-btn"        onclick="switchTab('stats')"   id="tab-stats">  <span>🎯</span><span>Verificación</span></button>
       <button class="tab-btn"        onclick="switchTab('admin')"   id="tab-admin">  <span>🧠</span><span>Admin</span></button>
     </nav>
 
@@ -297,9 +310,29 @@
 
     <section id="panel-stats" class="panel">
       <div class="glass-card">
-        <div class="section-title">📊 Estadísticas (Días de Surf)</div>
-        <p class="text-xs text-slate-500 mb-4">Altura (Hs) vs Periodo (Tp). Burbujas más grandes = más baños registrados.</p>
+        <div class="section-title">🎯 Verificación — Boya vs Modelos</div>
+        <p class="verif-note" style="margin-bottom:12px;">Hs medida por la boya de Barcelona frente a lo que pronosticó cada modelo. Menor error = mejor.</p>
+        <div class="verif-controls" id="verif-days">
+          <button class="verif-btn" data-days="3">3 días</button>
+          <button class="verif-btn active" data-days="7">7 días</button>
+          <button class="verif-btn" data-days="14">14 días</button>
+          <button class="verif-btn" data-days="30">30 días</button>
+        </div>
+        <div class="verif-controls" id="verif-lead">
+          <button class="verif-btn active" data-lead="0">Antelación 0–24 h</button>
+          <button class="verif-btn" data-lead="24">24–48 h</button>
+          <button class="verif-btn" data-lead="48">48–72 h</button>
+        </div>
+        <div id="verif-status" class="verif-note" style="margin-bottom:8px;"></div>
         <div style="position:relative; height:280px; width:100%;"><canvas id="surfChart"></canvas></div>
+        <div class="verif-sub">Error por modelo</div>
+        <div id="verif-table"></div>
+        <div class="verif-sub">Error medio (MAE, m) por ventana direccional</div>
+        <div id="verif-ventanas"></div>
+        <p class="verif-note" style="margin-top:10px;">
+          <b>Sesgo</b>: media de (modelo − boya); positivo = el modelo se pasa. <b>MAE</b>: error medio absoluto. <b>RMSE</b>: penaliza más los fallos grandes.
+          En verde, el mejor de cada fila/columna.
+        </p>
       </div>
     </section>
 
@@ -316,11 +349,6 @@
         <div id="admin-log">Esperando accion...\n</div>
       </div>
 
-      <div class="admin-card">
-        <div class="admin-title">🗑 Mantenimiento</div>
-        <button class="btn-admin" style="background:rgba(239,68,68,0.25); border:1px solid rgba(239,68,68,0.3);"
-                onclick="adminLimpiarForecast()">⚠ Borrar forecast_ai anterior a hoy</button>
-      </div>
     </section>
 
   </div><script>
@@ -449,31 +477,193 @@
     // -------------------------------------------------------------------------
     // GRAFICA ESTADISTICAS
     // -------------------------------------------------------------------------
+    const VERIF_MODELOS = [
+      { key:'ai',    label:'IA WaveLog', color:'#2dd4bf', width:2.5 },
+      { key:'ecmwf', label:'ECMWF',      color:'#0ea5e9', width:1.5 },
+      { key:'gfs',   label:'GFS',        color:'#f59e0b', width:1.5 },
+      { key:'mfwam', label:'MFWAM',      color:'#a78bfa', width:1.5 },
+      { key:'ewam',  label:'EWAM',       color:'#f472b6', width:1.5 },
+    ];
+    const verifState = { days: 7, lead: 0 };
+
+    document.querySelectorAll('#verif-days .verif-btn').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#verif-days .verif-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active'); verifState.days = +b.dataset.days; renderChart();
+    }));
+    document.querySelectorAll('#verif-lead .verif-btn').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#verif-lead .verif-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active'); verifState.lead = +b.dataset.lead; renderChart();
+    }));
+
+    function verifVentana(dir) {
+      if (dir == null) return null;
+      if (dir >= 337.5 || dir < 67.5)  return 'NE';
+      if (dir < 112.5) return 'E';
+      if (dir < 157.5) return 'SE';
+      if (dir < 202.5) return 'S';
+      return 'SW';
+    }
+
+    // Horas UTC sin zona ("2026-11-08T19:00") -> se interpretan como UTC
+    function verifToMs(t) {
+      if (!t) return NaN;
+      return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : t + 'Z').getTime();
+    }
+    const verifHourKey = ms => Math.round(ms / 3600000);
+
+    // Supabase devuelve como máximo 1000 filas por consulta: paginamos
+    async function verifFetchAll(buildQuery) {
+      const out = []; const page = 1000;
+      for (let from = 0; ; from += page) {
+        const { data, error } = await buildQuery().range(from, from + page - 1);
+        if (error) throw error;
+        out.push(...data);
+        if (data.length < page) break;
+      }
+      return out;
+    }
+
     async function renderChart() {
-      const { data, error } = await supabaseClient.from('sessions').select('waveHeight, period');
-      if (error || !data || !data.length) return;
-      const conteo = {};
-      data.forEach(s => {
-        if (s.waveHeight && s.period) {
-          const k = `${s.waveHeight}-${s.period}`;
-          if (!conteo[k]) conteo[k] = { x: s.period, y: s.waveHeight, r: 0 };
-          conteo[k].r += 6;
+      const statusEl = document.getElementById('verif-status');
+      statusEl.textContent = 'Cargando datos...';
+      const sinceIso = new Date(Date.now() - verifState.days * 86400000).toISOString();
+
+      try {
+        // 1) Boya: media por hora
+        const boya = await verifFetchAll(() => supabaseClient.from('boya_barcelona')
+          .select('fecha_oficial, hs').gte('fecha_oficial', sinceIso).order('fecha_oficial'));
+        const obs = new Map();
+        boya.forEach(r => {
+          if (r.hs == null) return;
+          const k = verifHourKey(verifToMs(r.fecha_oficial));
+          const o = obs.get(k) || { sum:0, n:0 }; o.sum += +r.hs; o.n++; obs.set(k, o);
+        });
+
+        // 2) Pronósticos: forecast_runs (por antelación) o, si no existe, forecast_ai
+        const fc = new Map();
+        let fuente = 'forecast_runs';
+        try {
+          const runs = await verifFetchAll(() => supabaseClient.from('forecast_runs')
+            .select('valid_time, lead_hours, ecmwf_hs, gfs_hs, mfwam_hs, ewam_hs, hs_ai, dir')
+            .gte('valid_time', sinceIso)
+            .gte('lead_hours', verifState.lead).lt('lead_hours', verifState.lead + 24)
+            .order('valid_time'));
+          if (!runs.length) throw new Error('vacío');
+          // Si hay varias pasadas en el mismo tramo, nos quedamos con la de menor antelación
+          runs.forEach(r => {
+            const k = verifHourKey(verifToMs(r.valid_time));
+            const prev = fc.get(k);
+            if (prev && prev.lead <= r.lead_hours) return;
+            fc.set(k, { lead:r.lead_hours, ai:r.hs_ai, ecmwf:r.ecmwf_hs, gfs:r.gfs_hs, mfwam:r.mfwam_hs, ewam:r.ewam_hs, dir:r.dir });
+          });
+        } catch {
+          fuente = 'forecast_ai';
+          const rows = await verifFetchAll(() => supabaseClient.from('forecast_ai')
+            .select('timestamp, ecmwf_hs, gfs_hs, ibi_hs, icon_hs, hs_ai, dir_ai')
+            .gte('forecast_date', sinceIso.slice(0, 10)).order('timestamp'));
+          rows.forEach(r => {
+            fc.set(verifHourKey(verifToMs(r.timestamp)),
+              { ai:r.hs_ai, ecmwf:r.ecmwf_hs, gfs:r.gfs_hs, mfwam:r.ibi_hs, ewam:r.icon_hs, dir:r.dir_ai });
+          });
         }
-      });
-      const ctx = document.getElementById('surfChart').getContext('2d');
-      if (surfChartInstance) surfChartInstance.destroy();
-      surfChartInstance = new Chart(ctx, {
-        type: 'bubble',
-        data: { datasets: [{ label:'Baños registrados', data:Object.values(conteo), backgroundColor:'rgba(20,184,166,0.6)', borderColor:'rgba(20,184,166,1)', borderWidth:1 }] },
-        options: {
-          responsive:true, maintainAspectRatio:false,
-          scales: {
-            x: { title:{ display:true, text:'Periodo (s)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' } },
-            y: { title:{ display:true, text:'Altura (m)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' } },
+
+        // 3) Eje temporal: desde "since" hasta ahora
+        const startK = verifHourKey(Date.parse(sinceIso)), endK = verifHourKey(Date.now());
+        const keys = []; for (let k = startK; k <= endK; k++) keys.push(k);
+        const labels = keys.map(k => new Date(k * 3600000).toLocaleString('es-ES',
+          { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }));
+        const val = v => (v == null || v <= 0) ? null : +v;
+
+        // 4) Estadísticas
+        const stats = {}, porVentana = {};
+        VERIF_MODELOS.forEach(m => stats[m.key] = { n:0, e:0, ae:0, se:0 });
+        keys.forEach(k => {
+          const o = obs.get(k), f = fc.get(k);
+          if (!o || !f) return;
+          const y = o.sum / o.n, ven = verifVentana(f.dir);
+          VERIF_MODELOS.forEach(m => {
+            const p = val(f[m.key]); if (p == null) return;
+            const e = p - y, s = stats[m.key];
+            s.n++; s.e += e; s.ae += Math.abs(e); s.se += e * e;
+            if (ven) {
+              porVentana[ven] ??= {};
+              const pv = porVentana[ven][m.key] ??= { n:0, ae:0 };
+              pv.n++; pv.ae += Math.abs(e);
+            }
+          });
+        });
+
+        // 5) Gráfica
+        const datasets = [{
+          label:'Boya', data: keys.map(k => { const o = obs.get(k); return o ? +(o.sum / o.n).toFixed(2) : null; }),
+          borderColor:'#ffffff', backgroundColor:'#ffffff', borderWidth:2.5, pointRadius:0, spanGaps:true, tension:0.25,
+        }];
+        VERIF_MODELOS.forEach(m => {
+          if (!stats[m.key].n && ![...fc.values()].some(f => val(f[m.key]) != null)) return;
+          datasets.push({ label:m.label, data: keys.map(k => { const f = fc.get(k); return f ? val(f[m.key]) : null; }),
+            borderColor:m.color, backgroundColor:m.color, borderWidth:m.width, pointRadius:0, spanGaps:true, tension:0.25,
+            borderDash: m.key === 'ai' ? [] : [4, 3] });
+        });
+
+        const ctx = document.getElementById('surfChart').getContext('2d');
+        if (surfChartInstance) surfChartInstance.destroy();
+        surfChartInstance = new Chart(ctx, {
+          type:'line', data:{ labels, datasets },
+          options:{
+            responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
+            scales:{
+              x:{ ticks:{ color:'#94a3b8', maxTicksLimit:7, maxRotation:0, font:{ size:9 } }, grid:{ color:'rgba(148,163,184,0.06)' } },
+              y:{ beginAtZero:true, title:{ display:true, text:'Hs (m)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' }, grid:{ color:'rgba(148,163,184,0.08)' } },
+            },
+            plugins:{ legend:{ labels:{ color:'#cbd5e1', boxWidth:12, font:{ size:10 } } } },
           },
-          plugins:{ legend:{ display:false } }
+        });
+
+        // 6) Tablas
+        const activos = VERIF_MODELOS.filter(m => stats[m.key].n > 0);
+        const fmt = (x, d=2) => (x >= 0 ? '' : '−') + Math.abs(x).toFixed(d);
+        if (!activos.length) {
+          document.getElementById('verif-table').innerHTML = '<p class="verif-note">Aún no hay horas con boya y pronóstico a la vez en este periodo.</p>';
+          document.getElementById('verif-ventanas').innerHTML = '';
+        } else {
+          const rows = activos.map(m => {
+            const s = stats[m.key];
+            return { m, n:s.n, bias:s.e / s.n, mae:s.ae / s.n, rmse:Math.sqrt(s.se / s.n) };
+          });
+          const bestMae  = Math.min(...rows.map(r => r.mae));
+          const bestRmse = Math.min(...rows.map(r => r.rmse));
+          const bestBias = Math.min(...rows.map(r => Math.abs(r.bias)));
+          document.getElementById('verif-table').innerHTML = `
+            <table class="verif-table">
+              <tr><th>Modelo</th><th>Horas</th><th>Sesgo</th><th>MAE</th><th>RMSE</th></tr>
+              ${rows.map(r => `<tr>
+                <td style="color:${r.m.color}">${r.m.label}</td><td>${r.n}</td>
+                <td class="${Math.abs(r.bias) === bestBias ? 'best' : ''}">${fmt(r.bias)}</td>
+                <td class="${r.mae === bestMae ? 'best' : ''}">${r.mae.toFixed(2)}</td>
+                <td class="${r.rmse === bestRmse ? 'best' : ''}">${r.rmse.toFixed(2)}</td></tr>`).join('')}
+            </table>`;
+
+          const vens = ['NE','E','SE','S','SW'].filter(v => porVentana[v]);
+          document.getElementById('verif-ventanas').innerHTML = `
+            <table class="verif-table">
+              <tr><th>Ventana</th>${activos.map(m => `<th style="color:${m.color}">${m.label.replace('IA WaveLog','IA')}</th>`).join('')}</tr>
+              ${vens.map(v => {
+                const maes = activos.map(m => { const p = porVentana[v][m.key]; return p ? p.ae / p.n : null; });
+                const best = Math.min(...maes.filter(x => x != null));
+                const n = Math.max(...activos.map(m => porVentana[v][m.key]?.n || 0));
+                return `<tr><td>${v} <span style="color:var(--muted)">(${n}h)</span></td>${maes.map(x =>
+                  `<td class="${x === best ? 'best' : ''}">${x == null ? '—' : x.toFixed(2)}</td>`).join('')}</tr>`;
+              }).join('')}
+            </table>`;
         }
-      });
+
+        const nComun = Math.max(0, ...activos.map(m => stats[m.key].n));
+        statusEl.innerHTML = fuente === 'forecast_runs'
+          ? `${nComun} horas comparadas · antelación ${verifState.lead}–${verifState.lead + 24} h`
+          : `${nComun} horas comparadas · <span style="color:var(--gold)">usando forecast_ai (última pasada, antelación corta). Crea la tabla forecast_runs para filtrar por antelación.</span>`;
+      } catch (err) {
+        statusEl.innerHTML = `<span style="color:var(--red)">Error cargando datos: ${err.message || err}</span>`;
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -773,17 +963,6 @@
       const { data } = await supabaseClient.from('forecast_ai').select('forecast_date, hs_ai').order('created_at', { ascending:false }).limit(3);
       if (data) data.forEach(f => adminLog(`forecast_ai: ${f.forecast_date} hs_ai=${f.hs_ai}m`));
       adminLog('Para ejecutar el Oracle completo, usa GitHub Actions.');
-    }
-
-    async function adminLimpiarForecast() {
-      if (!confirm('Borrar todos los pronosticos anteriores a hoy. Esta accion es irreversible.')) return;
-      const hoy = new Date().toISOString().split('T')[0];
-      const { error } = await supabaseClient.from('forecast_ai').delete().lt('forecast_date', hoy);
-      if (error) adminLog('ERROR: ' + error.message);
-      else {
-        adminLog('Pronosticos antiguos eliminados.');
-        oracleData = null; // Forzar recarga
-      }
     }
 
     // =========================================================================
