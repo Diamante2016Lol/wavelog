@@ -1,7 +1,7 @@
 """
 WaveLog — ECMWF ENS de olas (WAM ensemble, 50 miembros) para Barcelona.
 
-Baja del open data de ECMWF (espejo de AWS, peticiones en paralelo) solo la Hs (swh) de los miembros
+Baja del open data de ECMWF (data.ecmwf.int, peticiones en paralelo) solo la Hs (swh) de los miembros
 perturbados del último run 00z/12z, saca el punto de rejilla frente a Barcelona
 y guarda en Supabase (tabla ens_waves) los 50 valores + percentiles por hora.
 
@@ -30,7 +30,7 @@ LAT, LON = 41.25, 2.25
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
 
 
-ROOT = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+ROOT = "https://data.ecmwf.int/forecasts"  # el espejo de AWS da 503 desde GitHub Actions
 
 
 def _get(url, rango=None):
@@ -85,7 +85,7 @@ def descargar(path):
             else:
                 juntos.append([a, b])
         trozos += [(url + ".grib2", tuple(r)) for r in juntos]
-    with ThreadPoolExecutor(max_workers=8) as pool, open(path, "wb") as f:
+    with ThreadPoolExecutor(max_workers=6) as pool, open(path, "wb") as f:
         for datos in pool.map(lambda t: _get(*t), trozos):
             f.write(datos)
     print(f"{len(trozos)} peticiones · {os.path.getsize(path) / 1e6:.0f} MB")
