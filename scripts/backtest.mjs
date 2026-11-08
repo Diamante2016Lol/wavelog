@@ -16,12 +16,10 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 });
 
 function getVentana(dir) {
-  if (dir == null) return null;
-  if (dir >= 337.5 || dir < 67.5) return 'NE';
-  if (dir < 112.5) return 'E';
-  if (dir < 157.5) return 'SE';
-  if (dir < 202.5) return 'S';
-  return 'SW';
+  // 8 sectores de 45°, igual que la boya: N NE E SE S SO O NO (sin mezclar vecinas)
+  if (dir == null || isNaN(dir)) return null;
+  const d = ((dir % 360) + 360) % 360;
+  return ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(d / 45) % 8];
 }
 const hk = ms => Math.round(ms / 3600000);
 const toMs = t => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : t + 'Z').getTime();
@@ -65,7 +63,7 @@ boya.forEach(r => {
 // ── 3. Pesos actuales ───────────────────────────────────────────────────────
 const { data: wData } = await supabase.from('ai_weights').select('*').order('id', { ascending: false }).limit(1);
 const def = { hs_ibi: 0.25, hs_ecmwf: 0.35, hs_gfs: 0.25, hs_icon: 0.15, bias: 0 };
-const pesos = wData?.[0]?.weights || { NE: def, E: def, SE: def, S: def, SW: def };
+const pesos = wData?.[0]?.weights || {};
 const modeloId = wData?.[0]?.id ?? 'default';
 
 function combinar(vals, conf) {
@@ -153,7 +151,7 @@ if (train.length > 200 && test.length > 50) {
 }
 
 // ── 6. Por ventana (MAE) ────────────────────────────────────────────────────
-const vens = ['NE', 'E', 'SE', 'S', 'SW'];
+const vens = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
 const cols = ['ia_actual', 'ia_nueva', 'ecmwf', 'gfs', 'mfwam', 'ewam'];
 let mdVen = `\n### MAE (m) por ventana direccional\n\n| Ventana | Horas | ${cols.map(c => NOMBRES[c]).join(' | ')} |\n|---|---:|${cols.map(() => '---:').join('|')}|\n`;
 for (const v of vens) {

@@ -640,12 +640,10 @@
     }));
 
     function verifVentana(dir) {
-      if (dir == null) return null;
-      if (dir >= 337.5 || dir < 67.5)  return 'NE';
-      if (dir < 112.5) return 'E';
-      if (dir < 157.5) return 'SE';
-      if (dir < 202.5) return 'S';
-      return 'SW';
+      // 8 sectores de 45°, igual que la boya: N NE E SE S SO O NO (sin mezclar vecinas)
+      if (dir == null || isNaN(dir)) return null;
+      const d = ((dir % 360) + 360) % 360;
+      return ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(d / 45) % 8];
     }
 
     // Horas UTC sin zona ("2026-11-08T19:00") -> se interpretan como UTC
@@ -787,7 +785,7 @@
                 <td class="${r.rmse === bestRmse ? 'best' : ''}">${r.rmse.toFixed(2)}</td></tr>`).join('')}
             </table>`;
 
-          const vens = ['NE','E','SE','S','SW'].filter(v => porVentana[v]);
+          const vens = ['N','NE','E','SE','S','SO','O','NO'].filter(v => porVentana[v]);
           document.getElementById('verif-ventanas').innerHTML = `
             <table class="verif-table">
               <tr><th>Ventana</th>${activos.map(m => `<th style="color:${m.color}">${m.label.replace('IA WaveLog','IA')}</th>`).join('')}</tr>
