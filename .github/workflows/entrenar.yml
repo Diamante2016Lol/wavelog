@@ -1,0 +1,24 @@
+name: WaveLog Entrenar IA (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: 'probar = solo informe · guardar = guarda los pesos en ai_weights'
+        type: choice
+        options: [probar, guardar]
+        default: probar
+jobs:
+  entrenar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install @supabase/supabase-js
+      - name: Entrenar
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MODO: ${{ inputs.modo }}
+        run: node scripts/entrenar.mjs
