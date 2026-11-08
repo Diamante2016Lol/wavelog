@@ -3,7 +3,7 @@
 // Cambios respecto al entrenador anterior:
 //  1. Filtra por lo que dicen los MODELOS (ECMWF o GFS > 0.8 m), igual que el oracle,
 //     no por lo que midió la boya (eso sesgaba los pesos hacia arriba).
-//  2. Agrupa por la dirección de ECMWF, igual que el oracle (antes: dirección de la boya).
+//  2. Agrupa por la dirección de ECMWF en 8 sectores de 45° (N…NO), igual que el oracle.
 //  3. Solo 3 parámetros (ECMWF, GFS, bias), con regularización hacia "ECMWF tal cual",
 //     y una ventana necesita >= MIN_VENTANA muestras; si no, usa el ajuste global.
 //  4. Valida con el último tramo de datos (que el ajuste no ha visto) y compara con
@@ -23,19 +23,17 @@ const UMBRAL = 0.8;
 const MIN_VENTANA = 30;
 const LAMBDA = 5;          // fuerza de la regularización hacia [1, 0, 0]
 const DIAS_TEST = 30;
-const VENTANAS = ['NE', 'E', 'SE', 'S', 'SW'];
+const VENTANAS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false }, realtime: { enabled: false },
 });
 
 function getVentana(dir) {
-  if (dir == null) return 'S';
-  if (dir >= 337.5 || dir < 67.5) return 'NE';
-  if (dir < 112.5) return 'E';
-  if (dir < 157.5) return 'SE';
-  if (dir < 202.5) return 'S';
-  return 'SW';
+  // 8 sectores de 45°, igual que la boya: N NE E SE S SO O NO (sin mezclar vecinas)
+  if (dir == null || isNaN(dir)) return null;
+  const d = ((dir % 360) + 360) % 360;
+  return ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(d / 45) % 8];
 }
 const hk = ms => Math.round(ms / 3600000);
 const toMs = t => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : t + 'Z').getTime();
@@ -92,7 +90,7 @@ for (const [k, o] of obs) {
 }
 
 const todas = [...muestras.values()].sort((a, b) => a.k - b.k);
-const conOlas = todas.filter(m => Math.max(m.ecmwf, m.gfs) > UMBRAL);
+const conOlas = todas.filter(m => Math.max(m.ecmwf, m.gfs) > UMBRAL && m.dir != null && !isNaN(m.dir));
 conOlas.forEach(m => { m.ven = getVentana(m.dir); });
 
 let md = `# Entrenamiento WaveLog\n\nModo: **${MODO}** · Muestras totales: ${todas.length} `

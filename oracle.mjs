@@ -13,11 +13,10 @@ const UMBRAL_IA = 0.8; // metros — por encima: usa IA. Por debajo: media aritm
 // Clasificador de ventanas direccionales
 // ---------------------------------------------------------------------------
 function getVentana(dir) {
-  if (dir >= 337.5 || dir < 67.5)  return 'NE';
-  if (dir >= 67.5  && dir < 112.5) return 'E';
-  if (dir >= 112.5 && dir < 157.5) return 'SE';
-  if (dir >= 157.5 && dir < 202.5) return 'S';
-  return 'SW'; // 202.5 → 337.5
+  // 8 sectores de 45°, igual que la boya: N NE E SE S SO O NO (sin mezclar vecinas)
+  if (dir == null || isNaN(dir)) return null;
+  const d = ((dir % 360) + 360) % 360;
+  return ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(d / 45) % 8];
 }
 
 // ---------------------------------------------------------------------------
@@ -81,10 +80,7 @@ async function run() {
 
   // Pesos por defecto si la IA aún no ha sido entrenada con los 4 modelos
   const defaultWeights = { hs_ibi: 0, hs_ecmwf: 1, hs_gfs: 0, hs_icon: 0, bias: 0 }; // ECMWF tal cual
-  const pesosPorVentana = wData?.[0]?.weights || {
-    NE: defaultWeights, E: defaultWeights, SE: defaultWeights,
-    S:  defaultWeights, SW: defaultWeights,
-  };
+  const pesosPorVentana = wData?.[0]?.weights || {};  // ventana sin pesos -> defaultWeights
 
   const modeloId  = wData?.[0]?.id         || 'default';
   const muestras  = wData?.[0]?.training_samples || '—';
@@ -105,7 +101,7 @@ async function run() {
     const icon  = h.wave_height_dwd_ewam?.[i]         || 0;
 
     const tp  = h.wave_period_ecmwf_wam025?.[i]       || 0;
-    const dir = h.wave_direction_ecmwf_wam025?.[i]    || 180;
+    const dir = h.wave_direction_ecmwf_wam025?.[i]    ?? 180;
 
     // Ventana direccional y sus multiplicadores
     const ventana = getVentana(dir);
