@@ -1,7 +1,7 @@
 """
 WaveLog — ECMWF ENS de olas (WAM ensemble, 50 miembros) para Barcelona.
 
-Baja del open data de ECMWF (espejo de AWS) solo la Hs (swh) de los miembros
+Baja del open data de ECMWF (espejo de AWS, peticiones en paralelo) solo la Hs (swh) de los miembros
 perturbados del último run 00z/12z, saca el punto de rejilla frente a Barcelona
 y guarda en Supabase (tabla ens_waves) los 50 valores + percentiles por hora.
 
@@ -16,11 +16,13 @@ import os
 import sys
 import tempfile
 import urllib.request
-from datetime import timedelta
+import time
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import eccodes
 import numpy as np
-from ecmwf.opendata import Client
 
 # Mismo punto de rejilla 0.25° que usa Open-Meteo para el ECMWF determinista del oracle
 LAT, LON = 41.25, 2.25
@@ -28,13 +30,56 @@ LAT, LON = 41.25, 2.25
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
 
 
+ROOT = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+
+
+def _get(url, rango=None):
+    req = urllib.request.Request(url, headers={"Range": f"bytes={rango[0]}-{rango[1]}"} if rango else {})
+    for intento in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise
+        except Exception:
+            pass
+        time.sleep(2 * (intento + 1))
+    raise RuntimeError(f"No se pudo bajar {url}")
+
+
+def _base(run):
+    return f"{ROOT}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/waef/{run:%Y%m%d%H}0000"
+
+
+def ultimo_run():
+    """Último run 00z/12z que ya tiene publicado el paso +168 h."""
+    ahora = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    run = ahora.replace(hour=12 if ahora.hour >= 12 else 0)
+    for _ in range(6):
+        try:
+            _get(f"{_base(run)}-{STEPS[-1]}h-waef-ef.index", (0, 0))
+            return run
+        except Exception:
+            run -= timedelta(hours=12)
+    raise RuntimeError("No encuentro ningún run del ENS publicado")
+
+
 def descargar(path):
-    client = Client(source="aws")
-    req = dict(stream="waef", type="pf", param="swh", step=STEPS)
-    # +168 h solo existe en los runs 00z/12z y es el último paso en publicarse
-    run = client.latest(stream="waef", type="pf", param="swh", step=STEPS[-1])
+    """Solo los mensajes swh de cada paso, con peticiones Range en paralelo."""
+    run = ultimo_run()
     print(f"Run ENS: {run:%Y-%m-%d %H}z · {len(STEPS)} pasos")
-    client.retrieve(date=run.strftime("%Y%m%d"), time=run.hour, target=path, **req)
+    trozos = []
+    for step in STEPS:
+        url = f"{_base(run)}-{step}h-waef-ef"
+        for linea in _get(url + ".index").decode().splitlines():
+            m = json.loads(linea)
+            if m.get("param") == "swh":
+                trozos.append((url + ".grib2", (m["_offset"], m["_offset"] + m["_length"] - 1)))
+    with ThreadPoolExecutor(max_workers=32) as pool, open(path, "wb") as f:
+        for datos in pool.map(lambda t: _get(*t), trozos):
+            f.write(datos)
+    print(f"{len(trozos)} campos bajados")
     return run
 
 

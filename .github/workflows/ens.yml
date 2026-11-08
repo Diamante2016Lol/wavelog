@@ -9,12 +9,13 @@ on:
 jobs:
   ens:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install ecmwf-opendata eccodes numpy
+      - run: pip install eccodes numpy
       - name: Descargar ENS y guardar en Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
