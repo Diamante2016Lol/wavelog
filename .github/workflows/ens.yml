@@ -4,8 +4,6 @@ on:
     # Runs 00z y 12z del ENS publicados en open data hacia las 08 y 20 UTC
     - cron: '30 8,20 * * *'
   workflow_dispatch:
-  push:
-    branches: [ens-spread]   # TEMPORAL: para rellenar la tabla desde la rama, quitar antes del merge
 jobs:
   ens:
     runs-on: ubuntu-latest
