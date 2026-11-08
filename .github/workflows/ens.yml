@@ -1,9 +1,12 @@
 name: WaveLog ENS — Spread ECMWF
 on:
   schedule:
-    # Runs 00z y 12z del ENS publicados en open data hacia las 08 y 20 UTC
-    - cron: '30 8,20 * * *'
+    # Cada hora: si ECMWF ha publicado un run nuevo (00/06/12/18z) lo baja;
+    # si no, sale en segundos. Así se pilla cada run en cuanto sale, aunque vaya tarde.
+    - cron: '20 * * * *'
   workflow_dispatch:
+  push:
+    branches: [ens-spread]
 jobs:
   ens:
     runs-on: ubuntu-latest

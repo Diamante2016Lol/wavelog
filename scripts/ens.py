@@ -31,6 +31,11 @@ BUCKET = "wavelog"
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
 
 
+def pasos(run):
+    """Los runs 06z/18z solo llegan a +144 h."""
+    return [s for s in STEPS if run.hour in (0, 12) or s <= 144]
+
+
 ROOT = "https://data.ecmwf.int/forecasts"  # el espejo de AWS da 503 desde GitHub Actions
 
 
@@ -56,24 +61,33 @@ def _base(run):
 
 
 def ultimo_run():
-    """Último run 00z/12z que ya tiene publicado el paso +168 h."""
+    """Último run (00/06/12/18z) que ya tiene publicado su último paso."""
     ahora = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    run = ahora.replace(hour=12 if ahora.hour >= 12 else 0)
-    for _ in range(6):
+    run = ahora.replace(hour=ahora.hour // 6 * 6)
+    for _ in range(8):
         try:
-            _get(f"{_base(run)}-{STEPS[-1]}h-waef-ef.index", (0, 0))
+            _get(f"{_base(run)}-{pasos(run)[-1]}h-waef-ef.index", (0, 0))
             return run
         except Exception:
-            run -= timedelta(hours=12)
+            run -= timedelta(hours=6)
     raise RuntimeError("No encuentro ningún run del ENS publicado")
 
 
-def descargar(path):
+def json_actual():
+    """El ens.json que hay ahora en Storage (o None)."""
+    url = os.environ["SUPABASE_URL"].rstrip("/") + f"/storage/v1/object/public/{BUCKET}/ens.json"
+    try:
+        with urllib.request.urlopen(url + f"?t={int(time.time())}", timeout=30) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def descargar(path, run):
     """Solo los mensajes swh de cada paso, con peticiones Range en paralelo."""
-    run = ultimo_run()
-    print(f"Run ENS: {run:%Y-%m-%d %H}z · {len(STEPS)} pasos")
+    print(f"Run ENS: {run:%Y-%m-%d %H}z · {len(pasos(run))} pasos")
     trozos = []
-    for step in STEPS:
+    for step in pasos(run):
         url = f"{_base(run)}-{step}h-waef-ef"
         rangos = sorted((m["_offset"], m["_offset"] + m["_length"] - 1)
                         for m in map(json.loads, _get(url + ".index").decode().splitlines())
@@ -81,7 +95,7 @@ def descargar(path):
         # Junta rangos cercanos: menos peticiones (lo que sobra se descarta al leer)
         juntos = [list(rangos[0])]
         for a, b in rangos[1:]:
-            if a - juntos[-1][1] <= 2_000_000:
+            if a - juntos[-1][1] <= 200_000:
                 juntos[-1][1] = max(juntos[-1][1], b)
             else:
                 juntos.append([a, b])
@@ -153,6 +167,11 @@ def guardar(run, rows):
     estado = _supabase("POST", "/storage/v1/bucket",
                        json.dumps({"id": BUCKET, "name": BUCKET, "public": True}).encode())
     print(f"Bucket {BUCKET}: HTTP {estado} (400/409 = ya existía)")
+    # Un run 06z/18z llega a +144 h: el último día se completa con el run anterior
+    previo = json_actual()
+    if previo:
+        fin = rows[-1]["valid_time"]
+        rows = rows + [h for h in previo.get("horas", []) if h["valid_time"] > fin]
     cuerpo = json.dumps({"run_time": run.strftime("%Y-%m-%dT%H:00:00Z"), "lat": LAT, "lon": LON, "horas": rows}).encode()
     estado = _supabase("POST", f"/storage/v1/object/{BUCKET}/ens.json", cuerpo,
                        {"x-upsert": "true", "cache-control": "max-age=300"})
@@ -162,9 +181,15 @@ def guardar(run, rows):
 
 
 def main():
+    run = ultimo_run()
+    run_iso = run.strftime("%Y-%m-%dT%H:00:00Z")
+    previo = json_actual()
+    if previo and previo.get("run_time") == run_iso and "--forzar" not in sys.argv:
+        print(f"El run {run:%Y-%m-%d %H}z ya está subido; nada que hacer.")
+        return
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ens.grib2")
-        run = descargar(path)
+        descargar(path, run)
         rows = filas(run, extraer(path))
     if not rows:
         sys.exit("Sin datos en el punto: ¿celda de tierra?")
