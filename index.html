@@ -331,6 +331,17 @@
           </div>
         </div>
       </div>
+
+      <div class="glass-card" style="margin-top:14px;">
+        <div class="section-title">📊 Spread ECMWF ENS — próximos días</div>
+        <div id="ens-status" class="verif-note" style="margin-bottom:8px;">Cargando ensemble...</div>
+        <div style="position:relative; height:260px; width:100%;"><canvas id="ensChart"></canvas></div>
+        <div id="ens-table"></div>
+        <p class="verif-note" style="margin-top:8px;">
+          51 miembros del ECMWF WAM ensemble (0.25°). Banda clara = P10–P90, banda oscura = P25–P75, línea = mediana.
+          Spread = P90 − P10 de la Hs máxima de cada miembro entre 07 y 20 h. Cuanto más ancho, menos fiable es el pronóstico.
+        </p>
+      </div>
     </section>
 
     <section id="panel-spots" class="panel">
@@ -937,8 +948,9 @@
       // Solo recargamos si no tenemos datos o si han pasado mas de 30 min
       if (!oracleData) {
         contentEl.innerHTML = `<div class="oracle-empty"><div class="big-icon">⏳</div><h3>Consultando el Oráculo...</h3></div>`;
-        await loadOracleData();
+        await Promise.all([loadOracleData(), loadEns()]);
       }
+      renderEns();
 
       if (!oracleData || oracleData.length === 0) {
         contentEl.innerHTML = `
@@ -967,6 +979,144 @@
       badge.style.display = 'flex';
       document.getElementById('oracle-update-time').textContent =
         '🤖 Actualizado ' + new Date(ultimoCreado).toLocaleString('es-ES', { dateStyle:'short', timeStyle:'short' });
+    }
+
+    // -------------------------------------------------------------------------
+    // ECMWF ENS (WAM ensemble, 51 miembros) — spread de los próximos días
+    //   Se pide directamente a Open-Meteo desde el navegador (gratis, sin clave).
+    //   Horas en UTC, igual que forecast_ai, para poder cruzarlas por hora.
+    // -------------------------------------------------------------------------
+    const ENS_DIAS = 7;
+    let ensData = null;          // { horas:[{ms,n,p10,p25,p50,p75,p90,miembros}], nMiembros }
+    let ensChartInstance = null;
+
+    function ensQuantile(sorted, q) {
+      if (!sorted.length) return null;
+      const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+    }
+
+    async function loadEns() {
+      if (ensData) return ensData;
+      const base = 'https://marine-api.open-meteo.com/v1/marine?hourly=wave_height'
+        + `&models=ecmwf_wam025_ensemble&forecast_days=${ENS_DIAS + 1}`;
+      // Mismo punto que el oracle; si la celda 0.25° sale vacía, uno algo más mar adentro
+      for (const [lat, lon] of [[41.38, 2.15], [41.30, 2.25]]) {
+        try {
+          const res = await fetch(`${base}&latitude=${lat}&longitude=${lon}`);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const h = (await res.json()).hourly;
+          // Claves: wave_height (control) + wave_height_member01..50 (con o sin sufijo de modelo)
+          const claves = Object.keys(h).filter(k => k.startsWith('wave_height'));
+          if (!claves.length) continue;
+          const horas = h.time.map((t, i) => {
+            const miembros = claves.map(k => h[k][i]).filter(v => v != null && !isNaN(v));
+            const s = [...miembros].sort((a, b) => a - b);
+            return { ms: verifToMs(t), n: s.length, miembros,
+              p10: ensQuantile(s, .1), p25: ensQuantile(s, .25), p50: ensQuantile(s, .5),
+              p75: ensQuantile(s, .75), p90: ensQuantile(s, .9) };
+          }).filter(x => x.n >= 10);
+          if (!horas.length) continue;
+          ensData = { horas, nMiembros: claves.length, lat, lon };
+          return ensData;
+        } catch (e) { console.warn('ENS', lat, lon, e); }
+      }
+      return null;
+    }
+
+    function ensEnHora(ms) {
+      if (!ensData) return null;
+      // El ENS sale cada 3 h: si la hora exacta no está, la más cercana (±1 h)
+      const k = verifHourKey(ms);
+      let mejor = null;
+      for (const x of ensData.horas) {
+        const dk = Math.abs(verifHourKey(x.ms) - k);
+        if (dk <= 1 && (!mejor || dk < mejor.dk)) mejor = { dk, x };
+      }
+      return mejor ? mejor.x : null;
+    }
+
+    function ensConfianza(spread) {
+      if (spread < 0.3) return { txt:'Alta',  color:'var(--green)' };
+      if (spread < 0.6) return { txt:'Media', color:'var(--gold)' };
+      return               { txt:'Baja',  color:'var(--red)' };
+    }
+
+    async function renderEns() {
+      const statusEl = document.getElementById('ens-status');
+      const d = await loadEns();
+      if (!d) {
+        statusEl.innerHTML = '<span style="color:var(--red)">No se pudo cargar el ensemble de ECMWF (Open-Meteo).</span>';
+        return;
+      }
+      const ahora = Date.now() - 3600000;
+      const horas = d.horas.filter(x => x.ms >= ahora);
+
+      // Línea de la IA WaveLog encima, si hay datos del oracle para esas horas
+      const iaPorHora = new Map((oracleData || []).map(f => [verifHourKey(verifToMs(f.timestamp)), f.hs_ai]));
+      const labels = horas.map(x => new Date(x.ms).toLocaleString('es-ES', { weekday:'short', day:'2-digit', hour:'2-digit', minute:'2-digit' }));
+      const r = v => v == null ? null : +v.toFixed(2);
+      const banda = (data, fill, color, label) => ({ label, data, fill, backgroundColor: color, borderWidth: 0, pointRadius: 0, spanGaps: true, tension: 0.3 });
+
+      const datasets = [
+        banda(horas.map(x => r(x.p90)), false, 'transparent', 'P90'),
+        banda(horas.map(x => r(x.p10)), '-1', 'rgba(14,165,233,0.16)', 'P10–P90'),
+        banda(horas.map(x => r(x.p75)), false, 'transparent', 'P75'),
+        banda(horas.map(x => r(x.p25)), '-1', 'rgba(14,165,233,0.32)', 'P25–P75'),
+        { label:'Mediana ENS', data: horas.map(x => r(x.p50)), borderColor:'#0ea5e9', backgroundColor:'#0ea5e9',
+          borderWidth:2, pointRadius:0, spanGaps:true, tension:0.3, fill:false },
+      ];
+      if (horas.some(x => iaPorHora.has(verifHourKey(x.ms)))) {
+        datasets.push({ label:'IA WaveLog', data: horas.map(x => r(iaPorHora.get(verifHourKey(x.ms)))),
+          borderColor:'#2dd4bf', backgroundColor:'#2dd4bf', borderWidth:2, borderDash:[4,3], pointRadius:0, spanGaps:false, tension:0.3, fill:false });
+      }
+
+      const ctx = document.getElementById('ensChart').getContext('2d');
+      if (ensChartInstance) ensChartInstance.destroy();
+      ensChartInstance = new Chart(ctx, {
+        type:'line', data:{ labels, datasets },
+        options:{
+          responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
+          scales:{
+            x:{ ticks:{ color:'#94a3b8', maxTicksLimit:7, maxRotation:0, font:{ size:9 } }, grid:{ color:'rgba(148,163,184,0.06)' } },
+            y:{ beginAtZero:true, title:{ display:true, text:'Hs (m)', color:'#94a3b8' }, ticks:{ color:'#94a3b8' }, grid:{ color:'rgba(148,163,184,0.08)' } },
+          },
+          plugins:{
+            legend:{ labels:{ color:'#cbd5e1', boxWidth:12, font:{ size:10 }, filter: it => !['P90','P75'].includes(it.text) } },
+            tooltip:{ filter: it => !['P90','P75'].includes(it.dataset.label) },
+          },
+        },
+      });
+
+      // Resumen por día (horas de luz 07–20 h, hora local): Hs máxima de cada miembro
+      const porDia = new Map();
+      horas.forEach(x => {
+        const dt = new Date(x.ms), hLocal = dt.getHours();
+        if (hLocal < 7 || hLocal > 20) return;
+        const dia = dt.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
+        const maxs = porDia.get(dia) || [];
+        x.miembros.forEach((v, i) => { maxs[i] = Math.max(maxs[i] ?? 0, v); });
+        porDia.set(dia, maxs);
+      });
+      const filas = [...porDia.entries()].sort().slice(0, ENS_DIAS).map(([dia, maxs]) => {
+        const s = maxs.filter(v => v != null).sort((a, b) => a - b);
+        const p10 = ensQuantile(s, .1), p50 = ensQuantile(s, .5), p90 = ensQuantile(s, .9);
+        const prob1 = Math.round(100 * s.filter(v => v >= 1.0).length / s.length);
+        return { dia, p10, p50, p90, spread: p90 - p10, prob1 };
+      });
+
+      document.getElementById('ens-table').innerHTML = `
+        <table class="verif-table">
+          <tr><th>Día</th><th>Hs máx (P50)</th><th>P10–P90</th><th>Spread</th><th>P(≥1 m)</th><th>Confianza</th></tr>
+          ${filas.map(f => {
+            const c = ensConfianza(f.spread);
+            const etiqueta = new Date(f.dia + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'short', day:'numeric' });
+            return `<tr><td>${etiqueta}</td><td>${f.p50.toFixed(2)}</td><td>${f.p10.toFixed(2)}–${f.p90.toFixed(2)}</td>
+              <td>${f.spread.toFixed(2)}</td><td>${f.prob1}%</td><td style="color:${c.color}">${c.txt}</td></tr>`;
+          }).join('')}
+        </table>`;
+
+      statusEl.textContent = `${d.nMiembros} miembros · punto ${d.lat}, ${d.lon} · fuente: Open-Meteo (ECMWF WAM ENS)`;
     }
 
     async function loadOracleData() {
@@ -1051,6 +1201,7 @@
           const allMs   = [f.ibi_hs, f.ecmwf_hs, f.gfs_hs, f.icon_hs].filter(v => v !== null);
           const globalMax = Math.max(...allMs, f.hs_ai || 0, 0.1);
           const q = f.quality_score || 1;
+          const ens = ensEnHora(verifToMs(f.timestamp));
 
           html += `
             <div class="hora-card ${esMejor ? 'best-window' : ''} ${q === 0 ? 'flat' : ''}">
@@ -1066,6 +1217,7 @@
               </div>
               <div class="hora-meta">
                 <div class="hora-stars">${starsHtml(q)}</div>
+                ${ens ? `<div style="margin-top:4px;color:${ensConfianza(ens.p90 - ens.p10).color}" title="ECMWF ENS P10–P90">ENS ${ens.p10.toFixed(1)}–${ens.p90.toFixed(1)}m</div>` : ''}
                 ${f.tp_ai   ? `<div style="margin-top:4px;">Tp ${f.tp_ai}s</div>` : ''}
                 ${f.dir_ai  ? `<div>${f.dir_ai}</div>` : ''}
               </div>
