@@ -186,6 +186,19 @@
     .update-time { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:#c4b5fd; }
     .update-next { font-family:'JetBrains Mono',monospace; font-size:0.62rem; color:var(--muted); }
 
+    /* SPOTS */
+    .dir-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px; }
+    .spot-group-title { font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:0.18em; text-transform:uppercase; margin:16px 0 8px; }
+    .spot-card { background:rgba(5,18,40,0.65); border:1px solid rgba(20,184,166,0.16); border-radius:12px; padding:11px 13px; margin-bottom:8px; }
+    .spot-card.best  { border-color:rgba(34,197,94,0.45); }
+    .spot-card.avoid { border-color:rgba(239,68,68,0.3); opacity:0.85; }
+    .spot-name { font-family:'Syne',sans-serif; font-weight:700; font-size:0.92rem; color:#fff; }
+    .spot-zone { font-size:0.6rem; color:var(--muted); margin-left:6px; font-weight:400; }
+    .spot-meta { font-size:0.68rem; color:#94a3b8; margin-top:4px; line-height:1.5; }
+    .comment-card { border-left:2px solid rgba(20,184,166,0.4); padding:6px 10px; margin-bottom:9px; }
+    .comment-head { font-size:0.66rem; color:var(--teal-light); }
+    .comment-text { font-size:0.75rem; color:#cbd5e1; font-style:italic; margin-top:3px; }
+
     /* VERIFICACION */
     .verif-controls { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
     .verif-btn { flex:1; min-width:58px; padding:7px 6px; border-radius:10px; border:1px solid var(--card-border);
@@ -237,6 +250,7 @@
       <button class="tab-btn active" onclick="switchTab('log')"     id="tab-log">    <span>📝</span><span>Registrar</span></button>
       <button class="tab-btn"        onclick="switchTab('history')" id="tab-history"><span>🏄</span><span>Grupo</span></button>
       <button class="tab-btn"        onclick="switchTab('oracle')"  id="tab-oracle"> <span>🔮</span><span>Oráculo</span></button>
+      <button class="tab-btn"        onclick="switchTab('spots')"   id="tab-spots">  <span>📍</span><span>Spots</span></button>
       <button class="tab-btn"        onclick="switchTab('stats')"   id="tab-stats">  <span>🎯</span><span>Verificación</span></button>
       <button class="tab-btn"        onclick="switchTab('admin')"   id="tab-admin">  <span>🧠</span><span>Admin</span></button>
     </nav>
@@ -249,7 +263,7 @@
           <div class="form-group"><label class="form-label">Hora</label><input type="time" id="input-time" class="form-input"></div>
         </div>
         <div class="form-grid-2">
-          <div class="form-group"><label class="form-label">Spot</label><input type="text" id="input-spot" class="form-input" placeholder="Ej: La Barceloneta"></div>
+          <div class="form-group"><label class="form-label">Spot</label><input type="text" id="input-spot" class="form-input" placeholder="Ej: La Barceloneta" list="spots-datalist"><datalist id="spots-datalist"></datalist></div>
           <div class="form-group"><label class="form-label">Tu Nombre</label><input type="text" id="input-surfer" class="form-input" placeholder="Para el grupo"></div>
         </div>
         <div class="form-group">
@@ -305,6 +319,20 @@
             <p>Consultando el Oráculo...</p>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="panel-spots" class="panel">
+      <div class="glass-card">
+        <div class="section-title">📍 ¿Dónde voy?</div>
+        <div id="spots-boya" class="verif-note" style="margin-bottom:10px;">Cargando boya...</div>
+        <div class="dir-grid" id="spots-dirs"></div>
+        <button class="verif-btn" id="spots-boya-btn" style="width:100%; margin-bottom:4px;">📡 Usar la dirección de la boya</button>
+        <div id="spots-result"></div>
+        <p class="verif-note" style="margin-top:14px;">
+          La guía base es orientativa y se ajusta sola con vuestras sesiones: cuantos más baños registréis con su dirección
+          y puntuación, más pesa la experiencia del grupo. Para editar la guía, cambia <code>SPOTS_GUIA</code> en index.html.
+        </p>
       </div>
     </section>
 
@@ -395,6 +423,7 @@
       if (tabId === 'history') renderSessions();
       if (tabId === 'stats')   renderChart();
       if (tabId === 'oracle')  renderOracle();
+      if (tabId === 'spots')   renderSpots();
     }
 
     function setRating(v) {
@@ -477,6 +506,150 @@
     // -------------------------------------------------------------------------
     // GRAFICA ESTADISTICAS
     // -------------------------------------------------------------------------
+    // =========================================================================
+    // SPOTS — dónde ir según la dirección del mar
+    // =========================================================================
+    // Guía base orientativa (editable). Direcciones del mar de fondo: N NE E SE S SO O NO.
+    const SPOTS_GUIA = [
+      { nombre:'Barceloneta',   zona:'Barcelona',  alias:['barceloneta','sant miquel','sant sebastia','somorrostro','tyson'],
+        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'Beach break urbano, para todos los niveles. Con garbí (SO) el puerto le quita mar.' },
+      { nombre:'Bogatell / Mar Bella', zona:'Barcelona', alias:['bogatell','mar bella','nova mar bella','nova icaria','icaria'],
+        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'Algo más expuesto que la Barceloneta.' },
+      { nombre:'Llevant / Fòrum', zona:'Barcelona', alias:['llevant','forum','espigon de llevant','espigo de llevant'],
+        mejor:['E'], ok:['NE','SE'], evitar:['SO'], nota:'Junto al espigón: mejor con levante.' },
+      { nombre:'Badalona',      zona:'Barcelonès', alias:['badalona','pont del petroli','petroli'],
+        mejor:['E'], ok:['NE','SE'], evitar:['SO'], nota:'' },
+      { nombre:'Montgat',       zona:'Maresme',    alias:['montgat'],
+        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'' },
+      { nombre:'El Masnou / Ocata', zona:'Maresme', alias:['masnou','el masnou','ocata'],
+        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'' },
+      { nombre:'El Prat',       zona:'Baix Llobregat', alias:['el prat','prat','la ricarda'],
+        mejor:['SE','S'], ok:['E','SO'], evitar:['NE'], nota:'' },
+      { nombre:'Castelldefels', zona:'Baix Llobregat', alias:['castelldefels'],
+        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'Playa larga y suave: mejor con garbí; con levante fuerte también entra.' },
+      { nombre:'Port Ginesta',  zona:'Garraf',     alias:['port ginesta','ginesta'],
+        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'' },
+      { nombre:'Sitges',        zona:'Garraf',     alias:['sitges','les anquines','anquines'],
+        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'' },
+    ];
+    const DIRS = ['N','NE','E','SE','S','SO','O','NO'];
+    const DIRS_TIERRA = ['N','NO','O'];
+    const spotsState = { dir: null, boya: null, sesiones: null };
+
+    const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    const normSpot = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\b(platja|playa|plage)\s+(de\s+)?(la\s+|les\s+|el\s+|l')?/g, '').replace(/\s+/g, ' ').trim();
+    function spotDeGuia(nombre) {
+      const n = normSpot(nombre);
+      if (!n) return null;
+      return SPOTS_GUIA.find(g => g.alias.some(a => n === a || n.includes(a))) || null;
+    }
+    function dirsVecinas(d) {
+      const i = DIRS.indexOf(d); if (i < 0) return [];
+      return [DIRS[(i + 7) % 8], DIRS[(i + 1) % 8]];
+    }
+
+    document.getElementById('spots-datalist').innerHTML = SPOTS_GUIA.map(g => `<option value="${escHtml(g.nombre)}">`).join('');
+    document.getElementById('spots-dirs').innerHTML = DIRS.map(d => `<button class="verif-btn" data-dir="${d}">${d}</button>`).join('');
+    document.querySelectorAll('#spots-dirs .verif-btn').forEach(b => b.addEventListener('click', () => { spotsState.dir = b.dataset.dir; pintarSpots(); }));
+    document.getElementById('spots-boya-btn').addEventListener('click', () => {
+      if (spotsState.boya?.dir && DIRS.includes(spotsState.boya.dir)) { spotsState.dir = spotsState.boya.dir; pintarSpots(); }
+      else showToast('La boya no tiene dirección ahora mismo', true);
+    });
+
+    async function renderSpots() {
+      const [boyaRes, sesRes] = await Promise.all([
+        supabaseClient.from('boya_barcelona').select('*').order('fecha_oficial', { ascending:false }).limit(1),
+        supabaseClient.from('sessions').select('*').order('datetime', { ascending:false }),
+      ]);
+      spotsState.boya = boyaRes.data?.[0] || null;
+      spotsState.sesiones = sesRes.data || [];
+      const b = spotsState.boya;
+      document.getElementById('spots-boya').innerHTML = b
+        ? `📡 Boya ahora: <b style="color:#fff">${b.hs ?? '--'} m</b> · Tp <b style="color:#fff">${b.tp ?? '--'} s</b> · de <b style="color:#fff">${escHtml(b.dir || '--')}</b>
+           <span style="opacity:.7">(${new Date(b.fecha_oficial).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })})</span>`
+        : 'Sin datos de la boya.';
+      if (!spotsState.dir) spotsState.dir = (b?.dir && DIRS.includes(b.dir)) ? b.dir : 'E';
+      pintarSpots();
+    }
+
+    function pintarSpots() {
+      const dir = spotsState.dir, vecinas = dirsVecinas(dir), ses = spotsState.sesiones || [];
+      document.querySelectorAll('#spots-dirs .verif-btn').forEach(b => b.classList.toggle('active', b.dataset.dir === dir));
+      const hsAhora = spotsState.boya?.hs;
+
+      // Agrupar spots: guía + los que aparezcan en sesiones
+      const spots = new Map();
+      SPOTS_GUIA.forEach(g => spots.set(g.nombre, { nombre:g.nombre, zona:g.zona, guia:g, w:0, sum:0, nExacta:0, nVecina:0 }));
+      for (const s of ses) {
+        if (!s.spot) continue;
+        const g = spotDeGuia(s.spot);
+        const key = g ? g.nombre : s.spot.trim();
+        if (!spots.has(key)) spots.set(key, { nombre:key, zona:'Registrado por el grupo', guia:null, w:0, sum:0, nExacta:0, nVecina:0 });
+        const sp = spots.get(key);
+        const peso = s.seaDir === dir ? 1 : (vecinas.includes(s.seaDir) ? 0.5 : 0);
+        if (!peso || !s.rating) continue;
+        sp.w += peso; sp.sum += peso * s.rating;
+        if (peso === 1) sp.nExacta++; else sp.nVecina++;
+      }
+
+      // Puntuación: guía (prior) + media de estrellas del grupo, que pesa más cuantos más baños haya
+      const lista = [...spots.values()].map(sp => {
+        const g = sp.guia;
+        const tipo = !g ? null : g.mejor.includes(dir) ? 'mejor' : g.ok.includes(dir) ? 'ok' : g.evitar.includes(dir) ? 'evitar' : 'nada';
+        const prior = { mejor:4, ok:3, nada:2, evitar:1.5 }[tipo] ?? 2.5;
+        const media = sp.w ? sp.sum / sp.w : null;
+        const score = (prior * 2 + (media ?? 0) * sp.w) / (2 + sp.w);
+        return { ...sp, tipo, media, score };
+      }).filter(sp => sp.guia || sp.w > 0)
+        .sort((a, b) => b.score - a.score);
+
+      const tarjeta = (sp, cls) => {
+        const g = sp.guia, partes = [];
+        if (g) partes.push(`Guía: mejor con <b>${g.mejor.join(', ')}</b>${g.ok.length ? ` · también ${g.ok.join(', ')}` : ''}`);
+        if (sp.w > 0) {
+          const trozos = [];
+          if (sp.nExacta) trozos.push(`${sp.nExacta} baño${sp.nExacta === 1 ? '' : 's'} con ${dir}`);
+          if (sp.nVecina) trozos.push(`${sp.nVecina} con ${vecinas.join('/')}`);
+          partes.push(`Grupo: <span style="color:#fbbf24">★ ${sp.media.toFixed(1)}</span> en ${trozos.join(' + ')}`);
+        }
+        else partes.push('<span style="opacity:.7">Sin baños del grupo con esta dirección</span>');
+        if (g?.nota) partes.push(escHtml(g.nota));
+        return `<div class="spot-card ${cls}"><div class="spot-name">${escHtml(sp.nombre)}<span class="spot-zone">${escHtml(sp.zona)}</span></div>
+          <div class="spot-meta">${partes.join('<br>')}</div></div>`;
+      };
+
+      const mejores = lista.filter(s => s.score >= 3.5);
+      const pueden  = lista.filter(s => s.score >= 2.5 && s.score < 3.5);
+      const evitar  = lista.filter(s => s.score < 2.5);
+
+      let html = '';
+      if (DIRS_TIERRA.includes(dir)) {
+        html += `<p class="verif-note" style="color:var(--gold); margin-top:10px;">⚠ ${dir} es dirección de tierra: en la costa de Barcelona casi no entra mar con ella.
+          Si hay olas, suele ser mar de otra dirección que todavía queda.</p>`;
+      }
+      if (mejores.length) html += `<div class="spot-group-title" style="color:var(--green)">✅ Mejores con ${dir}</div>` + mejores.map(s => tarjeta(s, 'best')).join('');
+      if (pueden.length)  html += `<div class="spot-group-title" style="color:var(--sky)">🤏 Pueden funcionar</div>` + pueden.map(s => tarjeta(s, '')).join('');
+      if (evitar.length)  html += `<div class="spot-group-title" style="color:var(--red)">⛔ Mejor evitar</div>` + evitar.map(s => tarjeta(s, 'avoid')).join('');
+
+      // Comentarios de otros días con la misma dirección (y vecinas)
+      const coment = ses.filter(s => s.notes && s.notes.trim() && (s.seaDir === dir || vecinas.includes(s.seaDir)))
+        .sort((a, b) => (b.seaDir === dir) - (a.seaDir === dir) || new Date(b.datetime) - new Date(a.datetime))
+        .slice(0, 15);
+      html += `<div class="spot-group-title" style="color:var(--teal)">💬 Comentarios con ${dir}${vecinas.length ? ` (y ${vecinas.join('/')})` : ''}</div>`;
+      html += coment.length ? coment.map(s => {
+        const parecido = hsAhora != null && s.waveHeight != null && Math.abs(s.waveHeight - hsAhora) <= 0.3;
+        return `<div class="comment-card">
+          <div class="comment-head">${escHtml(s.spot)} · ${new Date(s.datetime).toLocaleDateString('es-ES')} · <span style="color:#fbbf24">${'★'.repeat(s.rating || 0)}</span>
+            · ${escHtml(s.surfer_name || 'Anónimo')}</div>
+          <div class="spot-meta" style="margin-top:2px;">🌊 ${s.waveHeight ?? '--'} m · ${s.period ?? '--'} s · mar ${escHtml(s.seaDir || '--')}${s.windDir ? ` · 💨 ${escHtml(s.windDir)}${s.windForce ? ' ' + escHtml(s.windForce) + ' kt' : ''}` : ''}
+            ${parecido ? ' · <span style="color:var(--green)">tamaño parecido a ahora</span>' : ''}</div>
+          <div class="comment-text">"${escHtml(s.notes)}"</div></div>`;
+      }).join('') : '<p class="verif-note">Aún no hay comentarios con esta dirección. ¡Registra tus baños con la dirección del mar y una nota!</p>';
+
+      document.getElementById('spots-result').innerHTML = html;
+    }
+
     const VERIF_MODELOS = [
       { key:'ai',    label:'IA WaveLog', color:'#2dd4bf', width:2.5 },
       { key:'ecmwf', label:'ECMWF',      color:'#0ea5e9', width:1.5 },
