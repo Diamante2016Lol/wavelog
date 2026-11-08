@@ -5,8 +5,6 @@ on:
     # si no, sale en segundos. Así se pilla cada run en cuanto sale, aunque vaya tarde.
     - cron: '20 * * * *'
   workflow_dispatch:
-  push:
-    branches: [ens-spread]
 jobs:
   ens:
     runs-on: ubuntu-latest
