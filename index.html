@@ -330,8 +330,8 @@
         <button class="verif-btn" id="spots-boya-btn" style="width:100%; margin-bottom:4px;">📡 Usar la dirección de la boya</button>
         <div id="spots-result"></div>
         <p class="verif-note" style="margin-top:14px;">
-          La guía base es orientativa y se ajusta sola con vuestras sesiones: cuantos más baños registréis con su dirección
-          y puntuación, más pesa la experiencia del grupo. Para editar la guía, cambia <code>SPOTS_GUIA</code> en index.html.
+          Todo sale de las sesiones del grupo: media de estrellas de los baños con esa dirección del mar (las direcciones vecinas cuentan la mitad).
+          Mejores ≥ 3,5 ★ · evitar &lt; 2,5 ★. Registra siempre la dirección del mar para que cuente.
         </p>
       </div>
     </section>
@@ -509,29 +509,6 @@
     // =========================================================================
     // SPOTS — dónde ir según la dirección del mar
     // =========================================================================
-    // Guía base orientativa (editable). Direcciones del mar de fondo: N NE E SE S SO O NO.
-    const SPOTS_GUIA = [
-      { nombre:'Barceloneta',   zona:'Barcelona',  alias:['barceloneta','sant miquel','sant sebastia','somorrostro','tyson'],
-        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'Beach break urbano, para todos los niveles. Con garbí (SO) el puerto le quita mar.' },
-      { nombre:'Bogatell / Mar Bella', zona:'Barcelona', alias:['bogatell','mar bella','nova mar bella','nova icaria','icaria'],
-        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'Algo más expuesto que la Barceloneta.' },
-      { nombre:'Llevant / Fòrum', zona:'Barcelona', alias:['llevant','forum','espigon de llevant','espigo de llevant'],
-        mejor:['E'], ok:['NE','SE'], evitar:['SO'], nota:'Junto al espigón: mejor con levante.' },
-      { nombre:'Badalona',      zona:'Barcelonès', alias:['badalona','pont del petroli','petroli'],
-        mejor:['E'], ok:['NE','SE'], evitar:['SO'], nota:'' },
-      { nombre:'Montgat',       zona:'Maresme',    alias:['montgat'],
-        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'' },
-      { nombre:'El Masnou / Ocata', zona:'Maresme', alias:['masnou','el masnou','ocata'],
-        mejor:['E','SE'], ok:['NE','S'], evitar:['SO'], nota:'' },
-      { nombre:'El Prat',       zona:'Baix Llobregat', alias:['el prat','prat','la ricarda'],
-        mejor:['SE','S'], ok:['E','SO'], evitar:['NE'], nota:'' },
-      { nombre:'Castelldefels', zona:'Baix Llobregat', alias:['castelldefels'],
-        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'Playa larga y suave: mejor con garbí; con levante fuerte también entra.' },
-      { nombre:'Port Ginesta',  zona:'Garraf',     alias:['port ginesta','ginesta'],
-        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'' },
-      { nombre:'Sitges',        zona:'Garraf',     alias:['sitges','les anquines','anquines'],
-        mejor:['S','SO'], ok:['SE','E'], evitar:['NE'], nota:'' },
-    ];
     const DIRS = ['N','NE','E','SE','S','SO','O','NO'];
     const DIRS_TIERRA = ['N','NO','O'];
     const spotsState = { dir: null, boya: null, sesiones: null };
@@ -539,17 +516,19 @@
     const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
     const normSpot = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
       .replace(/\b(platja|playa|plage)\s+(de\s+)?(la\s+|les\s+|el\s+|l')?/g, '').replace(/\s+/g, ' ').trim();
-    function spotDeGuia(nombre) {
-      const n = normSpot(nombre);
-      if (!n) return null;
-      return SPOTS_GUIA.find(g => g.alias.some(a => n === a || n.includes(a))) || null;
-    }
     function dirsVecinas(d) {
       const i = DIRS.indexOf(d); if (i < 0) return [];
       return [DIRS[(i + 7) % 8], DIRS[(i + 1) % 8]];
     }
 
-    document.getElementById('spots-datalist').innerHTML = SPOTS_GUIA.map(g => `<option value="${escHtml(g.nombre)}">`).join('');
+    // Autocompletado con los spots que ya ha registrado el grupo
+    async function cargarDatalistSpots() {
+      const { data } = await supabaseClient.from('sessions').select('spot');
+      const vistos = new Map();
+      (data || []).forEach(r => { const n = normSpot(r.spot); if (n && !vistos.has(n)) vistos.set(n, r.spot.trim()); });
+      document.getElementById('spots-datalist').innerHTML = [...vistos.values()].sort().map(v => `<option value="${escHtml(v)}">`).join('');
+    }
+    cargarDatalistSpots();
     document.getElementById('spots-dirs').innerHTML = DIRS.map(d => `<button class="verif-btn" data-dir="${d}">${d}</button>`).join('');
     document.querySelectorAll('#spots-dirs .verif-btn').forEach(b => b.addEventListener('click', () => { spotsState.dir = b.dataset.dir; pintarSpots(); }));
     document.getElementById('spots-boya-btn').addEventListener('click', () => {
@@ -578,44 +557,32 @@
       document.querySelectorAll('#spots-dirs .verif-btn').forEach(b => b.classList.toggle('active', b.dataset.dir === dir));
       const hsAhora = spotsState.boya?.hs;
 
-      // Agrupar spots: guía + los que aparezcan en sesiones
+      // Agrupar las sesiones por spot (nombre normalizado) con esta dirección y las vecinas
       const spots = new Map();
-      SPOTS_GUIA.forEach(g => spots.set(g.nombre, { nombre:g.nombre, zona:g.zona, guia:g, w:0, sum:0, nExacta:0, nVecina:0 }));
       for (const s of ses) {
-        if (!s.spot) continue;
-        const g = spotDeGuia(s.spot);
-        const key = g ? g.nombre : s.spot.trim();
-        if (!spots.has(key)) spots.set(key, { nombre:key, zona:'Registrado por el grupo', guia:null, w:0, sum:0, nExacta:0, nVecina:0 });
-        const sp = spots.get(key);
+        if (!s.spot || !s.rating) continue;
         const peso = s.seaDir === dir ? 1 : (vecinas.includes(s.seaDir) ? 0.5 : 0);
-        if (!peso || !s.rating) continue;
+        if (!peso) continue;
+        const key = normSpot(s.spot);
+        if (!spots.has(key)) spots.set(key, { nombre:s.spot.trim(), w:0, sum:0, nExacta:0, nVecina:0 });
+        const sp = spots.get(key);
         sp.w += peso; sp.sum += peso * s.rating;
         if (peso === 1) sp.nExacta++; else sp.nVecina++;
       }
 
-      // Puntuación: guía (prior) + media de estrellas del grupo, que pesa más cuantos más baños haya
-      const lista = [...spots.values()].map(sp => {
-        const g = sp.guia;
-        const tipo = !g ? null : g.mejor.includes(dir) ? 'mejor' : g.ok.includes(dir) ? 'ok' : g.evitar.includes(dir) ? 'evitar' : 'nada';
-        const prior = { mejor:4, ok:3, nada:2, evitar:1.5 }[tipo] ?? 2.5;
-        const media = sp.w ? sp.sum / sp.w : null;
-        const score = (prior * 2 + (media ?? 0) * sp.w) / (2 + sp.w);
-        return { ...sp, tipo, media, score };
-      }).filter(sp => sp.guia || sp.w > 0)
-        .sort((a, b) => b.score - a.score);
+      // Media de estrellas, suavizada hacia 3 para que un solo baño no lo decida todo
+      const lista = [...spots.values()].map(sp => ({ ...sp, media: sp.sum / sp.w, score: (3 + sp.sum) / (1 + sp.w) }))
+        .sort((a, b) => b.score - a.score || b.w - a.w);
 
       const tarjeta = (sp, cls) => {
-        const g = sp.guia, partes = [];
-        if (g) partes.push(`Guía: mejor con <b>${g.mejor.join(', ')}</b>${g.ok.length ? ` · también ${g.ok.join(', ')}` : ''}`);
-        if (sp.w > 0) {
+        const partes = [];
+        {
           const trozos = [];
           if (sp.nExacta) trozos.push(`${sp.nExacta} baño${sp.nExacta === 1 ? '' : 's'} con ${dir}`);
           if (sp.nVecina) trozos.push(`${sp.nVecina} con ${vecinas.join('/')}`);
-          partes.push(`Grupo: <span style="color:#fbbf24">★ ${sp.media.toFixed(1)}</span> en ${trozos.join(' + ')}`);
+          partes.push(`<span style="color:#fbbf24">★ ${sp.media.toFixed(1)}</span> en ${trozos.join(' + ')}`);
         }
-        else partes.push('<span style="opacity:.7">Sin baños del grupo con esta dirección</span>');
-        if (g?.nota) partes.push(escHtml(g.nota));
-        return `<div class="spot-card ${cls}"><div class="spot-name">${escHtml(sp.nombre)}<span class="spot-zone">${escHtml(sp.zona)}</span></div>
+        return `<div class="spot-card ${cls}"><div class="spot-name">${escHtml(sp.nombre)}</div>
           <div class="spot-meta">${partes.join('<br>')}</div></div>`;
       };
 
@@ -624,6 +591,7 @@
       const evitar  = lista.filter(s => s.score < 2.5);
 
       let html = '';
+      if (!lista.length) html += `<p class="verif-note" style="margin-top:12px;">Todavía no hay baños registrados con ${dir}. En cuanto el grupo registre sesiones con esta dirección del mar, aparecerán aquí los spots ordenados por puntuación.</p>`;
       if (DIRS_TIERRA.includes(dir)) {
         html += `<p class="verif-note" style="color:var(--gold); margin-top:10px;">⚠ ${dir} es dirección de tierra: en la costa de Barcelona casi no entra mar con ella.
           Si hay olas, suele ser mar de otra dirección que todavía queda.</p>`;
