@@ -318,10 +318,10 @@
         <div class="verif-controls" id="ens-puntos"></div>
         <div id="ens-status" class="verif-note" style="margin-bottom:8px;">Cargando ensemble...</div>
         <div style="position:relative; height:260px; width:100%;"><canvas id="ensChart"></canvas></div>
-        <div id="ens-table"></div>
+        <div id="ens-table" style="overflow-x:auto;"></div>
         <p class="verif-note" style="margin-top:8px;">
           50 miembros del ECMWF WAM ensemble (0.25°). Las celdas pegadas a la costa salen como tierra: Castelldefels y Barcelona son las más cercanas con dato. Se actualiza con cada run nuevo (cada 6 h). Banda clara = P10–P90, banda oscura = P25–P75, línea = mediana.
-          Spread = P90 − P10 de la Hs máxima de cada miembro entre 07 y 20 h. Cuanto más ancho, menos fiable es el pronóstico.
+          Spread = P90 − P10 de la Hs máxima de cada miembro entre 07 y 20 h. Dirección = de dónde viene el mar (media circular de los miembros); ± = cuánto discrepan. Cuanto más ancho, menos fiable es el pronóstico.
         </p>
       </div>
       <div class="glass-card">
@@ -1011,7 +1011,8 @@
           const puntos = {};
           for (const [k, p] of Object.entries(crudos)) {
             const horas = p.horas.map(r => ({ ms: verifToMs(r.valid_time), n: r.n, miembros: r.miembros || [],
-              p10: r.p10, p25: r.p25, p50: r.p50, p75: r.p75, p90: r.p90 })).filter(x => x.ms >= desde);
+              p10: r.p10, p25: r.p25, p50: r.p50, p75: r.p75, p90: r.p90,
+              dirMedia: r.dir_media ?? null, dirDisp: r.dir_disp ?? null, dirs: r.dirs || [] })).filter(x => x.ms >= desde);
             if (horas.length) puntos[k] = { nombre:p.nombre, lat:p.lat, lon:p.lon, run:j.run_time, horas,
               nMiembros: Math.max(...horas.map(x => x.n)) };
           }
@@ -1022,6 +1023,23 @@
       if (!ensTodo.puntos[ensPunto]) ensPunto = Object.keys(ensTodo.puntos)[0];
       ensData = ensTodo.puntos[ensPunto];
       return ensData;
+    }
+
+    // Dirección de procedencia (°, desde el N) -> flecha hacia donde va la ola + sector de 8
+    function ensDirHtml(dir, disp) {
+      if (dir == null) return '';
+      return `<span style="display:inline-block;transform:rotate(${dir}deg)">↓</span> ${Math.round(dir)}° ${verifVentana(dir)}`
+        + (disp != null ? ` <span style="color:var(--muted)">±${Math.round(disp)}°</span>` : '');
+    }
+
+    function ensDirMedia(dirs) {
+      const v = dirs.filter(d => d != null);
+      if (!v.length) return null;
+      const s = v.reduce((a, d) => a + Math.sin(d * Math.PI / 180), 0) / v.length;
+      const c = v.reduce((a, d) => a + Math.cos(d * Math.PI / 180), 0) / v.length;
+      const R = Math.min(1, Math.hypot(s, c));
+      return { media: ((Math.atan2(s, c) * 180 / Math.PI) + 360) % 360,
+               disp: R > 1e-9 ? Math.min(180, Math.sqrt(-2 * Math.log(R)) * 180 / Math.PI) : 180 };
     }
 
     function ensElegirPunto(k) {
@@ -1107,25 +1125,28 @@
         const dt = new Date(x.ms), hLocal = dt.getHours();
         if (hLocal < 7 || hLocal > 20) return;
         const dia = dt.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
-        const maxs = porDia.get(dia) || [];
-        x.miembros.forEach((v, i) => { maxs[i] = Math.max(maxs[i] ?? 0, v); });
-        porDia.set(dia, maxs);
+        const dd = porDia.get(dia) || { maxs: [], dirs: [] };
+        x.miembros.forEach((v, i) => {
+          if (dd.maxs[i] == null || v > dd.maxs[i]) { dd.maxs[i] = v; dd.dirs[i] = x.dirs[i] ?? null; }
+        });
+        porDia.set(dia, dd);
       });
-      const filas = [...porDia.entries()].sort().slice(0, ENS_DIAS).map(([dia, maxs]) => {
+      const filas = [...porDia.entries()].sort().slice(0, ENS_DIAS).map(([dia, { maxs, dirs }]) => {
         const s = maxs.filter(v => v != null).sort((a, b) => a - b);
+        const dir = ensDirMedia(dirs);
         const p10 = ensQuantile(s, .1), p50 = ensQuantile(s, .5), p90 = ensQuantile(s, .9);
         const prob1 = Math.round(100 * s.filter(v => v >= 1.0).length / s.length);
-        return { dia, p10, p50, p90, spread: p90 - p10, prob1 };
+        return { dia, p10, p50, p90, spread: p90 - p10, prob1, dir };
       });
 
       document.getElementById('ens-table').innerHTML = `
         <table class="verif-table">
-          <tr><th>Día</th><th>Hs máx (P50)</th><th>P10–P90</th><th>Spread</th><th>P(≥1 m)</th><th>Confianza</th></tr>
+          <tr><th>Día</th><th>Hs máx (P50)</th><th>P10–P90</th><th>Spread</th><th>Dir. en el pico</th><th>P(≥1 m)</th><th>Confianza</th></tr>
           ${filas.map(f => {
             const c = ensConfianza(f.spread);
             const etiqueta = new Date(f.dia + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'short', day:'numeric' });
             return `<tr><td>${etiqueta}</td><td>${f.p50.toFixed(2)}</td><td>${f.p10.toFixed(2)}–${f.p90.toFixed(2)}</td>
-              <td>${f.spread.toFixed(2)}</td><td>${f.prob1}%</td><td style="color:${c.color}">${c.txt}</td></tr>`;
+              <td>${f.spread.toFixed(2)}</td><td style="white-space:nowrap">${f.dir ? ensDirHtml(f.dir.media, f.dir.disp) : '—'}</td><td>${f.prob1}%</td><td style="color:${c.color}">${c.txt}</td></tr>`;
           }).join('')}
         </table>`;
 
@@ -1230,7 +1251,7 @@
               </div>
               <div class="hora-meta">
                 <div class="hora-stars">${starsHtml(q)}</div>
-                ${ens ? `<div style="margin-top:4px;color:${ensConfianza(ens.p90 - ens.p10).color}" title="ECMWF ENS: mediana (P10–P90)">ENS ${ens.p50.toFixed(2)}m<br><span style="font-size:0.9em">${ens.p10.toFixed(1)}–${ens.p90.toFixed(1)}</span></div>` : ''}
+                ${ens ? `<div style="margin-top:4px;color:${ensConfianza(ens.p90 - ens.p10).color}" title="ECMWF ENS: mediana (P10–P90)">ENS ${ens.p50.toFixed(2)}m<br><span style="font-size:0.9em">${ens.p10.toFixed(1)}–${ens.p90.toFixed(1)}</span>${ens.dirMedia != null ? `<br><span style="font-size:0.9em;color:var(--foam)">${ensDirHtml(ens.dirMedia, ens.dirDisp)}</span>` : ''}</div>` : ''}
                 ${f.tp_ai   ? `<div style="margin-top:4px;">Tp ${f.tp_ai}s</div>` : ''}
                 ${f.dir_ai  ? `<div>${f.dir_ai}</div>` : ''}
               </div>

@@ -32,6 +32,7 @@ PUNTOS = {
 }
 # 3 h los 3 primeros días (cuadra con las tarjetas horarias), 6 h hasta el día 7
 BUCKET = "wavelog"
+PARAMS = ("swh", "mwd")  # Hs (m) y dirección media de procedencia (°, desde el N)
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
 
 
@@ -88,14 +89,14 @@ def json_actual():
 
 
 def descargar(path, run):
-    """Solo los mensajes swh de cada paso, con peticiones Range en paralelo."""
+    """Solo los mensajes swh y mwd de cada paso, con peticiones Range en paralelo."""
     print(f"Run ENS: {run:%Y-%m-%d %H}z · {len(pasos(run))} pasos")
     trozos = []
     for step in pasos(run):
         url = f"{_base(run)}-{step}h-waef-ef"
         rangos = sorted((m["_offset"], m["_offset"] + m["_length"] - 1)
                         for m in map(json.loads, _get(url + ".index").decode().splitlines())
-                        if m.get("param") == "swh")
+                        if m.get("param") in PARAMS)
         # Junta rangos cercanos: menos peticiones (lo que sobra se descarta al leer)
         juntos = [list(rangos[0])]
         for a, b in rangos[1:]:
@@ -112,7 +113,7 @@ def descargar(path, run):
 
 
 def extraer(path):
-    """{punto: {step: [hs de cada miembro]}} para cada celda de PUNTOS."""
+    """{punto: {step: {miembro: {"swh": hs, "mwd": dir}}}} para cada celda de PUNTOS."""
     por_punto, idx = {k: {} for k in PUNTOS}, None
     with open(path, "rb") as f:
         while True:
@@ -120,7 +121,8 @@ def extraer(path):
             if gid is None:
                 break
             try:
-                if eccodes.codes_get_string(gid, "shortName") != "swh":
+                param = eccodes.codes_get_string(gid, "shortName")
+                if param not in PARAMS:
                     continue
                 if idx is None:
                     idx = {}
@@ -130,30 +132,49 @@ def extraer(path):
                         print(f"{p['nombre']}: celda {near['lat']:.2f}, {near['lon']:.2f}")
                 missing = eccodes.codes_get_double(gid, "missingValue")
                 step = eccodes.codes_get_long(gid, "step")
+                num = eccodes.codes_get_long(gid, "number")
                 for k, i in idx.items():
                     v = eccodes.codes_get_double_element(gid, "values", i)
                     if v != missing and not np.isnan(v):
-                        por_punto[k].setdefault(step, []).append(round(float(v), 3))
+                        por_punto[k].setdefault(step, {}).setdefault(num, {})[param] = round(float(v), 3 if param == "swh" else 0)
             finally:
                 eccodes.codes_release(gid)
     return por_punto
 
 
+def dir_stats(dirs):
+    """Media circular (°) y dispersión circular (°) de una lista de direcciones."""
+    r = np.radians(dirs)
+    s, c = np.sin(r).mean(), np.cos(r).mean()
+    R = min(1.0, float(np.hypot(s, c)))
+    media = float(np.degrees(np.arctan2(s, c))) % 360
+    disp = float(np.degrees(np.sqrt(-2 * np.log(R)))) if R > 1e-9 else 180.0
+    return round(media), round(min(disp, 180.0))
+
+
 def filas(run, por_paso):
     out = []
     for step in sorted(por_paso):
-        m = por_paso[step]
+        miembros = [por_paso[step][n] for n in sorted(por_paso[step]) if "swh" in por_paso[step][n]]
+        m = [x["swh"] for x in miembros]
         if len(m) < 10:
             continue
         p10, p25, p50, p75, p90 = (round(float(x), 3) for x in np.percentile(m, [10, 25, 50, 75, 90]))
-        out.append({
+        fila = {
             "valid_time": (run + timedelta(hours=step)).strftime("%Y-%m-%dT%H:00:00Z"),
             "run_time": run.strftime("%Y-%m-%dT%H:00:00Z"),
             "lead_hours": step,
             "n": len(m),
             "p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90,
             "miembros": m,
-        })
+        }
+        # Dirección: misma posición que en "miembros" (null si a ese miembro le falta)
+        dirs = [x.get("mwd") for x in miembros]
+        validas = [d for d in dirs if d is not None]
+        if len(validas) >= 10:
+            fila["dir_media"], fila["dir_disp"] = dir_stats(validas)
+            fila["dirs"] = [None if d is None else int(d) for d in dirs]
+        out.append(fila)
     return out
 
 
@@ -206,7 +227,8 @@ def main():
             continue
         r = rows[8]
         print(f"{p['nombre']}: {len(rows)} pasos · {r['n']} miembros · "
-              f"+{r['lead_hours']}h P10 {r['p10']} · P50 {r['p50']} · P90 {r['p90']}")
+              f"+{r['lead_hours']}h P10 {r['p10']} · P50 {r['p50']} · P90 {r['p90']} · "
+              f"dir {r.get('dir_media')}° ±{r.get('dir_disp')}°")
         puntos[k] = {**p, "horas": rows}
     if not puntos:
         sys.exit("Sin datos en ningún punto")
