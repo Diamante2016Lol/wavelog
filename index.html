@@ -983,7 +983,7 @@
 
     // -------------------------------------------------------------------------
     // ECMWF ENS (WAM ensemble, 50 miembros) — spread de los próximos días
-    //   Viene de la tabla ens_waves (scripts/ens.py). Pasos de 3 h hasta +72 h, luego 6 h.
+    //   Viene de Supabase Storage: wavelog/ens.json (scripts/ens.py). Pasos de 3 h hasta +72 h, luego 6 h.
     // -------------------------------------------------------------------------
     const ENS_DIAS = 7;
     let ensData = null;          // { horas:[{ms,n,p10,p25,p50,p75,p90,miembros}], nMiembros }
@@ -997,17 +997,18 @@
 
     async function loadEns() {
       if (ensData) return ensData;
-      // Lo rellena scripts/ens.py (GitHub Actions) desde el open data de ECMWF
-      const { data, error } = await supabaseClient.from('ens_waves')
-        .select('valid_time, run_time, n, p10, p25, p50, p75, p90, miembros')
-        .gte('valid_time', new Date(Date.now() - 3 * 3600000).toISOString())
-        .order('valid_time');
-      if (error) { console.warn('ENS', error); return null; }
-      if (!data || !data.length) return null;
-      const horas = data.map(r => ({ ms: verifToMs(r.valid_time), n: r.n, miembros: r.miembros || [],
-        p10: r.p10, p25: r.p25, p50: r.p50, p75: r.p75, p90: r.p90 }));
-      ensData = { horas, nMiembros: Math.max(...data.map(r => r.n)), run: data[data.length - 1].run_time };
-      return ensData;
+      // Lo genera scripts/ens.py (GitHub Actions) desde el open data de ECMWF
+      try {
+        const res = await fetch(`${SUPABASE_URL}/storage/v1/object/public/wavelog/ens.json?t=${Math.floor(Date.now() / 600000)}`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const j = await res.json();
+        const desde = Date.now() - 3 * 3600000;
+        const horas = j.horas.map(r => ({ ms: verifToMs(r.valid_time), n: r.n, miembros: r.miembros || [],
+          p10: r.p10, p25: r.p25, p50: r.p50, p75: r.p75, p90: r.p90 })).filter(x => x.ms >= desde);
+        if (!horas.length) return null;
+        ensData = { horas, nMiembros: Math.max(...horas.map(x => x.n)), run: j.run_time };
+        return ensData;
+      } catch (e) { console.warn('ENS', e); return null; }
     }
 
     function ensEnHora(ms) {
@@ -1032,7 +1033,7 @@
       const statusEl = document.getElementById('ens-status');
       const d = await loadEns();
       if (!d) {
-        statusEl.innerHTML = '<span style="color:var(--gold)">Aún no hay datos del ENS. Crea la tabla ens_waves (supabase/ens_waves.sql) y lanza el workflow "WaveLog ENS".</span>';
+        statusEl.innerHTML = '<span style="color:var(--gold)">Aún no hay datos del ENS (se generan a las 08:30 y 20:30 UTC).</span>';
         return;
       }
       const ahora = Date.now() - 3600000;

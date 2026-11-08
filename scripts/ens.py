@@ -3,7 +3,7 @@ WaveLog — ECMWF ENS de olas (WAM ensemble, 50 miembros) para Barcelona.
 
 Baja del open data de ECMWF (data.ecmwf.int, peticiones en paralelo) solo la Hs (swh) de los miembros
 perturbados del último run 00z/12z, saca el punto de rejilla frente a Barcelona
-y guarda en Supabase (tabla ens_waves) los 50 valores + percentiles por hora.
+y lo sube a Supabase Storage (wavelog/ens.json, público) los 50 valores + percentiles por hora.
 
 Open-Meteo acepta el modelo ecmwf_wam025_ensemble pero hoy devuelve todo null,
 por eso se va a la fuente.
@@ -27,6 +27,7 @@ import numpy as np
 # Mismo punto de rejilla 0.25° que usa Open-Meteo para el ECMWF determinista del oracle
 LAT, LON = 41.25, 2.25
 # 3 h los 3 primeros días (cuadra con las tarjetas horarias), 6 h hasta el día 7
+BUCKET = "wavelog"
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
 
 
@@ -135,15 +136,29 @@ def filas(run, por_paso):
     return out
 
 
-def guardar(rows):
-    url = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/ens_waves?on_conflict=valid_time"
+def _supabase(method, ruta, cuerpo, extra=None):
+    base = os.environ["SUPABASE_URL"].rstrip("/")
     key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    req = urllib.request.Request(url, data=json.dumps(rows).encode(), method="POST", headers={
-        "apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=minimal",
-    })
-    with urllib.request.urlopen(req) as r:
-        print(f"Supabase: HTTP {r.status}")
+    req = urllib.request.Request(base + ruta, data=cuerpo, method=method, headers={
+        "apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json", **(extra or {})})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def guardar(run, rows):
+    """Sube ens.json a un bucket público de Supabase Storage (no hace falta crear tablas)."""
+    estado = _supabase("POST", "/storage/v1/bucket",
+                       json.dumps({"id": BUCKET, "name": BUCKET, "public": True}).encode())
+    print(f"Bucket {BUCKET}: HTTP {estado} (400/409 = ya existía)")
+    cuerpo = json.dumps({"run_time": run.strftime("%Y-%m-%dT%H:00:00Z"), "lat": LAT, "lon": LON, "horas": rows}).encode()
+    estado = _supabase("POST", f"/storage/v1/object/{BUCKET}/ens.json", cuerpo,
+                       {"x-upsert": "true", "cache-control": "max-age=300"})
+    print(f"Subida ens.json: HTTP {estado}")
+    if estado >= 300:
+        sys.exit(1)
 
 
 def main():
@@ -157,7 +172,7 @@ def main():
           f"ej. +{rows[8]['lead_hours']}h: P10 {rows[8]['p10']} · P50 {rows[8]['p50']} · P90 {rows[8]['p90']}")
     if "--dry-run" in sys.argv:
         return
-    guardar(rows)
+    guardar(run, rows)
 
 
 if __name__ == "__main__":
