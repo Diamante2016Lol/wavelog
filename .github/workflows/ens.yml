@@ -1,0 +1,22 @@
+name: WaveLog ENS — Spread ECMWF
+on:
+  schedule:
+    # Runs 00z y 12z del ENS publicados en open data hacia las 08 y 20 UTC
+    - cron: '30 8,20 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ens-spread]   # TEMPORAL: prueba en seco, quitar antes del merge
+jobs:
+  ens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ecmwf-opendata eccodes numpy
+      - name: Descargar ENS y guardar en Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scripts/ens.py ${{ github.event_name == 'push' && '--dry-run' || '' }}
