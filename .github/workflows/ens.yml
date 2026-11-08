@@ -5,6 +5,8 @@ on:
     # si no, sale en segundos. Así se pilla cada run en cuanto sale, aunque vaya tarde.
     - cron: '20 * * * *'
   workflow_dispatch:
+  push:
+    branches: [ens-spread]
 jobs:
   ens:
     runs-on: ubuntu-latest
@@ -19,4 +21,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python scripts/ens.py
+        run: python scripts/ens.py ${{ github.event_name == 'push' && '--forzar' || '' }}

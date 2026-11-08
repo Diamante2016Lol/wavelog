@@ -2,7 +2,7 @@
 WaveLog — ECMWF ENS de olas (WAM ensemble, 50 miembros) para Barcelona.
 
 Baja del open data de ECMWF (data.ecmwf.int, peticiones en paralelo) solo la Hs (swh) de los miembros
-perturbados del último run 00z/12z, saca el punto de rejilla frente a Barcelona
+perturbados del último run 00z/12z, saca las celdas de Castelldefels y Barcelona
 y lo sube a Supabase Storage (wavelog/ens.json, público) los 50 valores + percentiles por hora.
 
 Open-Meteo acepta el modelo ecmwf_wam025_ensemble pero hoy devuelve todo null,
@@ -25,7 +25,11 @@ import eccodes
 import numpy as np
 
 # Mismo punto de rejilla 0.25° que usa Open-Meteo para el ECMWF determinista del oracle
-LAT, LON = 41.25, 2.25
+# Celdas 0.25° con dato más cercanas a la costa (las de la orilla salen como tierra)
+PUNTOS = {
+    "castefa": {"nombre": "Castelldefels", "lat": 41.25, "lon": 2.00},
+    "bcn":     {"nombre": "Barcelona",     "lat": 41.25, "lon": 2.25},
+}
 # 3 h los 3 primeros días (cuadra con las tarjetas horarias), 6 h hasta el día 7
 BUCKET = "wavelog"
 STEPS = list(range(0, 73, 3)) + list(range(78, 169, 6))
@@ -108,8 +112,8 @@ def descargar(path, run):
 
 
 def extraer(path):
-    """{step: [hs de cada miembro]} en el punto LAT/LON."""
-    por_paso, idx = {}, None
+    """{punto: {step: [hs de cada miembro]}} para cada celda de PUNTOS."""
+    por_punto, idx = {k: {} for k in PUNTOS}, None
     with open(path, "rb") as f:
         while True:
             gid = eccodes.codes_grib_new_from_file(f)
@@ -119,17 +123,20 @@ def extraer(path):
                 if eccodes.codes_get_string(gid, "shortName") != "swh":
                     continue
                 if idx is None:
-                    near = eccodes.codes_grib_find_nearest(gid, LAT, LON)[0]
-                    idx = near["index"]
-                    print(f"Punto de rejilla: {near['lat']:.2f}, {near['lon']:.2f}")
-                v = eccodes.codes_get_double_element(gid, "values", idx)
+                    idx = {}
+                    for k, p in PUNTOS.items():
+                        near = eccodes.codes_grib_find_nearest(gid, p["lat"], p["lon"])[0]
+                        idx[k] = near["index"]
+                        print(f"{p['nombre']}: celda {near['lat']:.2f}, {near['lon']:.2f}")
                 missing = eccodes.codes_get_double(gid, "missingValue")
                 step = eccodes.codes_get_long(gid, "step")
-                if v != missing and not np.isnan(v):
-                    por_paso.setdefault(step, []).append(round(float(v), 3))
+                for k, i in idx.items():
+                    v = eccodes.codes_get_double_element(gid, "values", i)
+                    if v != missing and not np.isnan(v):
+                        por_punto[k].setdefault(step, []).append(round(float(v), 3))
             finally:
                 eccodes.codes_release(gid)
-    return por_paso
+    return por_punto
 
 
 def filas(run, por_paso):
@@ -162,17 +169,17 @@ def _supabase(method, ruta, cuerpo, extra=None):
         return e.code
 
 
-def guardar(run, rows):
+def guardar(run, puntos):
     """Sube ens.json a un bucket público de Supabase Storage (no hace falta crear tablas)."""
     estado = _supabase("POST", "/storage/v1/bucket",
                        json.dumps({"id": BUCKET, "name": BUCKET, "public": True}).encode())
     print(f"Bucket {BUCKET}: HTTP {estado} (400/409 = ya existía)")
     # Un run 06z/18z llega a +144 h: el último día se completa con el run anterior
-    previo = json_actual()
-    if previo:
-        fin = rows[-1]["valid_time"]
-        rows = rows + [h for h in previo.get("horas", []) if h["valid_time"] > fin]
-    cuerpo = json.dumps({"run_time": run.strftime("%Y-%m-%dT%H:00:00Z"), "lat": LAT, "lon": LON, "horas": rows}).encode()
+    previo = (json_actual() or {}).get("puntos", {})
+    for k, p in puntos.items():
+        fin = p["horas"][-1]["valid_time"]
+        p["horas"] += [h for h in previo.get(k, {}).get("horas", []) if h["valid_time"] > fin]
+    cuerpo = json.dumps({"run_time": run.strftime("%Y-%m-%dT%H:00:00Z"), "puntos": puntos}).encode()
     estado = _supabase("POST", f"/storage/v1/object/{BUCKET}/ens.json", cuerpo,
                        {"x-upsert": "true", "cache-control": "max-age=300"})
     print(f"Subida ens.json: HTTP {estado}")
@@ -190,14 +197,22 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ens.grib2")
         descargar(path, run)
-        rows = filas(run, extraer(path))
-    if not rows:
-        sys.exit("Sin datos en el punto: ¿celda de tierra?")
-    print(f"{len(rows)} pasos · {rows[0]['n']} miembros · "
-          f"ej. +{rows[8]['lead_hours']}h: P10 {rows[8]['p10']} · P50 {rows[8]['p50']} · P90 {rows[8]['p90']}")
+        por_punto = extraer(path)
+    puntos = {}
+    for k, p in PUNTOS.items():
+        rows = filas(run, por_punto[k])
+        if not rows:
+            print(f"⚠ {p['nombre']}: sin datos (¿celda de tierra?)")
+            continue
+        r = rows[8]
+        print(f"{p['nombre']}: {len(rows)} pasos · {r['n']} miembros · "
+              f"+{r['lead_hours']}h P10 {r['p10']} · P50 {r['p50']} · P90 {r['p90']}")
+        puntos[k] = {**p, "horas": rows}
+    if not puntos:
+        sys.exit("Sin datos en ningún punto")
     if "--dry-run" in sys.argv:
         return
-    guardar(run, rows)
+    guardar(run, puntos)
 
 
 if __name__ == "__main__":
