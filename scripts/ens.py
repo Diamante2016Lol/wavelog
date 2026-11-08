@@ -35,17 +35,19 @@ ROOT = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
 
 def _get(url, rango=None):
     req = urllib.request.Request(url, headers={"Range": f"bytes={rango[0]}-{rango[1]}"} if rango else {})
-    for intento in range(4):
+    ultimo = None
+    for intento in range(6):
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=120) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise
-        except Exception:
-            pass
-        time.sleep(2 * (intento + 1))
-    raise RuntimeError(f"No se pudo bajar {url}")
+            ultimo = e
+        except Exception as e:
+            ultimo = e
+        time.sleep(3 * (intento + 1))
+    raise RuntimeError(f"No se pudo bajar {url} ({ultimo})")
 
 
 def _base(run):
@@ -72,14 +74,21 @@ def descargar(path):
     trozos = []
     for step in STEPS:
         url = f"{_base(run)}-{step}h-waef-ef"
-        for linea in _get(url + ".index").decode().splitlines():
-            m = json.loads(linea)
-            if m.get("param") == "swh":
-                trozos.append((url + ".grib2", (m["_offset"], m["_offset"] + m["_length"] - 1)))
-    with ThreadPoolExecutor(max_workers=32) as pool, open(path, "wb") as f:
+        rangos = sorted((m["_offset"], m["_offset"] + m["_length"] - 1)
+                        for m in map(json.loads, _get(url + ".index").decode().splitlines())
+                        if m.get("param") == "swh")
+        # Junta rangos cercanos: menos peticiones (lo que sobra se descarta al leer)
+        juntos = [list(rangos[0])]
+        for a, b in rangos[1:]:
+            if a - juntos[-1][1] <= 2_000_000:
+                juntos[-1][1] = max(juntos[-1][1], b)
+            else:
+                juntos.append([a, b])
+        trozos += [(url + ".grib2", tuple(r)) for r in juntos]
+    with ThreadPoolExecutor(max_workers=8) as pool, open(path, "wb") as f:
         for datos in pool.map(lambda t: _get(*t), trozos):
             f.write(datos)
-    print(f"{len(trozos)} campos bajados")
+    print(f"{len(trozos)} peticiones · {os.path.getsize(path) / 1e6:.0f} MB")
     return run
 
 
@@ -92,6 +101,8 @@ def extraer(path):
             if gid is None:
                 break
             try:
+                if eccodes.codes_get_string(gid, "shortName") != "swh":
+                    continue
                 if idx is None:
                     near = eccodes.codes_grib_find_nearest(gid, LAT, LON)[0]
                     idx = near["index"]
@@ -139,7 +150,6 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ens.grib2")
         run = descargar(path)
-        print(f"Descargado: {os.path.getsize(path) / 1e6:.0f} MB")
         rows = filas(run, extraer(path))
     if not rows:
         sys.exit("Sin datos en el punto: ¿celda de tierra?")
