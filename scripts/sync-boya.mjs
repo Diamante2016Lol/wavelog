@@ -61,62 +61,46 @@ async function main() {
 
   console.log(`[sync-boya] Registros recibidos: ${registros.length}`);
 
-  // PASO 2: Seleccionar el más reciente con Hs válido
-  registros.sort((a, b) => parseFecha(b.fecha) - parseFecha(a.fecha));
-
-  let registroValido = null;
-  let oleaje         = null;
-
+  // PASO 2: Convertir TODOS los registros con Hs válido (Portus devuelve ~48 h).
+  //   Antes solo se guardaba el más reciente, así que si GitHub se saltaba
+  //   ejecuciones (pasa a menudo con los cron horarios) esas horas se perdían.
+  const filas = [];
   for (const reg of registros) {
-    const datos = extraerOleaje(reg);
-    if (datos.hs !== null) {
-      registroValido = reg;
-      oleaje         = datos;
-      break;
-    }
+    const oleaje   = extraerOleaje(reg);
+    const fechaIso = convertirFechaAIso(reg.fecha);
+    if (oleaje.hs === null || !fechaIso) continue;
+    filas.push({
+      fecha_oficial: fechaIso,
+      hs:            redondear(oleaje.hs, 2),
+      hmax:          oleaje.hmax !== null ? redondear(oleaje.hmax, 2) : redondear(oleaje.hs * 1.55, 2),
+      tp:            oleaje.tp  !== null ? redondear(oleaje.tp,  1) : null,
+      dir:           gradosACardinal(oleaje.dir),
+      dir_grados:    oleaje.dir !== null ? Math.round(oleaje.dir)   : null,
+    });
   }
 
-  if (!registroValido || !oleaje) {
+  if (!filas.length) {
     console.error('[sync-boya] ERROR: Ningún registro contiene datos de Hs');
     process.exit(1);
   }
+  filas.sort((a, b) => a.fecha_oficial.localeCompare(b.fecha_oficial));
+  const ultima = filas.at(-1);
+  console.log(`[sync-boya] ${filas.length} registros válidos · último: ${ultima.fecha_oficial} Hs=${ultima.hs}m`);
 
-  console.log(`[sync-boya] Registro seleccionado: ${registroValido.fecha} · Hs=${oleaje.hs}m`);
-
-  // PASO 3: Insertar en Supabase
-  const fechaIso = convertirFechaAIso(registroValido.fecha);
-
-  if (!fechaIso) {
-    console.error(`[sync-boya] ERROR: Fecha inválida → ${registroValido.fecha}`);
-    process.exit(1);
-  }
-
-  const fila = {
-    fecha_oficial: fechaIso,
-    hs:            redondear(oleaje.hs, 2),
-    hmax:          oleaje.hmax !== null ? redondear(oleaje.hmax, 2) : redondear(oleaje.hs * 1.55, 2),
-    tp:            oleaje.tp  !== null ? redondear(oleaje.tp,  1) : null,
-    dir:           gradosACardinal(oleaje.dir),
-    dir_grados:    oleaje.dir !== null ? Math.round(oleaje.dir)   : null,
-  };
-
-  const { data: insertado, error: errorInsert } = await supabase
+  // PASO 3: Guardar los que falten (los que ya existen se ignoran)
+  const { data: insertados, error: errorInsert } = await supabase
     .from(TABLE_NAME)
-    .insert(fila, { onConflict: 'fecha_oficial', ignoreDuplicates: true })
-    .select();
+    .upsert(filas, { onConflict: 'fecha_oficial', ignoreDuplicates: true })
+    .select('fecha_oficial');
 
   if (errorInsert) {
     console.error('[sync-boya] ERROR de Supabase:', errorInsert.message);
     process.exit(1);
   }
 
-  const esDuplicado = !insertado || insertado.length === 0;
-
-  if (esDuplicado) {
-    console.log(`[sync-boya] Registro ${fechaIso} ya existia — omitido`);
-  } else {
-    console.log(`[sync-boya] Guardado: Hs=${fila.hs}m Hmax=${fila.hmax}m Tp=${fila.tp}s Dir=${fila.dir} (${fechaIso})`);
-  }
+  const nuevos = insertados?.length || 0;
+  console.log(`[sync-boya] ${nuevos} horas nuevas guardadas, ${filas.length - nuevos} ya existían.`
+    + (nuevos ? ` Nuevas: ${insertados.map(r => r.fecha_oficial.slice(5, 16)).join(', ')}` : ''));
 }
 
 // =============================================================================

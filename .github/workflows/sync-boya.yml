@@ -2,7 +2,11 @@ name: Sync Boya Barcelona
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # Portus publica cada hora ~30-35 min después (el de las 10:00 sale ~10:35).
+    # Dos pasadas por hora; además cada pasada rellena las últimas 48 h, así que
+    # si GitHub se salta alguna ejecución no se pierde nada.
+    - cron: '41 * * * *'
+    - cron: '56 * * * *'
   workflow_dispatch:
 
 jobs:
