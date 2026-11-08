@@ -73,20 +73,35 @@ h.time.forEach((t, i) => fc.set(hk(toMs(t)), {
   dir: h.wave_direction_ecmwf_wam025?.[i],
 }));
 
-const since = new Date(Date.now() - 92 * 86400000).toISOString();
-const boya = await leerTodo('boya_barcelona', 'fecha_oficial, hs', q => q.gte('fecha_oficial', since));
+// Open-Meteo solo da 92 días hacia atrás. Para la boya más antigua se usan los
+// pronósticos que el propio oracle ha ido guardando en forecast_runs (pasada de
+// menor antelación disponible para cada hora, siempre < 24 h).
+let runs = [];
+try {
+  runs = await leerTodo('forecast_runs', 'valid_time, lead_hours, ecmwf_hs, gfs_hs, dir',
+    q => q.lt('lead_hours', 24).order('valid_time'));
+} catch (e) { console.warn('Aviso: no se pudo leer forecast_runs:', e.message); }
+const fcRuns = new Map();
+for (const r of runs) {
+  const k = hk(toMs(r.valid_time)), prev = fcRuns.get(k);
+  if (prev && prev.lead <= r.lead_hours) continue;
+  fcRuns.set(k, { lead: r.lead_hours, ecmwf: pos(r.ecmwf_hs), gfs: pos(r.gfs_hs), dir: r.dir });
+}
+
+const boya = await leerTodo('boya_barcelona', 'fecha_oficial, hs', q => q.order('fecha_oficial'));
 const obs = new Map();
 for (const r of boya) {
   const y = pos(r.hs); if (y == null) continue;
   const k = hk(toMs(r.fecha_oficial)); const o = obs.get(k) || { s: 0, n: 0 };
   o.s += y; o.n++; obs.set(k, o);
 }
-let nuevas = 0;
+let nuevas = 0, deRuns = 0;
 for (const [k, o] of obs) {
-  const f = fc.get(k);
+  let f = fc.get(k), fuente = 'boya+open-meteo';
+  if (!f || f.ecmwf == null || f.gfs == null) { f = fcRuns.get(k); fuente = 'boya+forecast_runs'; }
   if (!f || f.ecmwf == null || f.gfs == null) continue;
-  if (!muestras.has(k)) nuevas++;
-  muestras.set(k, { k, y: o.s / o.n, ecmwf: f.ecmwf, gfs: f.gfs, dir: f.dir, fuente: 'boya+open-meteo' });
+  if (!muestras.has(k)) { nuevas++; if (fuente === 'boya+forecast_runs') deRuns++; }
+  muestras.set(k, { k, y: o.s / o.n, ecmwf: f.ecmwf, gfs: f.gfs, dir: f.dir, fuente });
 }
 
 const todas = [...muestras.values()].sort((a, b) => a.k - b.k);
@@ -94,7 +109,7 @@ const conOlas = todas.filter(m => Math.max(m.ecmwf, m.gfs) > UMBRAL && m.dir != 
 conOlas.forEach(m => { m.ven = getVentana(m.dir); });
 
 let md = `# Entrenamiento WaveLog\n\nModo: **${MODO}** · Muestras totales: ${todas.length} `
-  + `(training_data: ${td.length}, nuevas de boya+Open-Meteo: ${nuevas}) · `
+  + `(training_data: ${td.length}, nuevas de boya: ${nuevas}, de ellas con forecast_runs: ${deRuns}) · `
   + `**Con modelos > ${UMBRAL} m: ${conOlas.length}**\n`;
 if (todas.length) md += `\nPeriodo: ${new Date(todas[0].k * 3600000).toISOString().slice(0, 10)} → ${new Date(todas.at(-1).k * 3600000).toISOString().slice(0, 10)}\n`;
 
