@@ -208,7 +208,7 @@ def guardar(run, puntos):
         sys.exit(1)
 
 
-def main():
+def procesar():
     run = ultimo_run()
     run_iso = run.strftime("%Y-%m-%dT%H:00:00Z")
     previo = json_actual()
@@ -235,6 +235,24 @@ def main():
     if "--dry-run" in sys.argv:
         return
     guardar(run, puntos)
+
+
+def main():
+    if "--vigilar" not in sys.argv:
+        procesar()
+        return
+    # GitHub retrasa o se salta muchas ejecuciones programadas: en vez de fiarse del cron,
+    # el job se queda vigilando ~5 h 45 min y mira cada 10 min si hay un run nuevo.
+    fin = time.time() + 345 * 60
+    while True:
+        try:
+            procesar()
+        except (Exception, SystemExit) as e:  # un fallo puntual (red, run a medio publicar) no tumba la vigilancia
+            print(f"⚠ {e}")
+        if time.time() + 600 > fin:
+            break
+        sys.stdout.flush()
+        time.sleep(600)
 
 
 if __name__ == "__main__":
