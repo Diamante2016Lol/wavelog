@@ -1,14 +1,18 @@
 name: WaveLog ENS — Spread ECMWF
 on:
   schedule:
-    # Cada hora: si ECMWF ha publicado un run nuevo (00/06/12/18z) lo baja;
-    # si no, sale en segundos. Así se pilla cada run en cuanto sale, aunque vaya tarde.
+    # GitHub se salta muchas ejecuciones programadas, así que cada ejecución se queda
+    # vigilando ~6 h (mira cada 10 min si ECMWF ha sacado un run nuevo) y las del cron
+    # solo sirven para relevarla. Como mucho una queda en cola (concurrency).
     - cron: '20 * * * *'
   workflow_dispatch:
+concurrency:
+  group: ens
+  cancel-in-progress: false
 jobs:
   ens:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 370
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,4 +23,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python scripts/ens.py
+        run: python -u scripts/ens.py --vigilar
