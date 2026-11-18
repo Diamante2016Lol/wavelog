@@ -6,17 +6,7 @@ jobs:
   d:
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          H='-H "Accept: application/json" -H "Origin: https://portus.puertos.es" -H "Referer: https://portus.puertos.es/" -A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X)"'
-          U="https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es"
-          eval curl -sS $H -H "Content-Type: application/json" -X POST -d "'[20,34,32,17,13]'" "'$U'" > post.json
-          eval curl -sS $H "'$U'" > get.json
-          for f in post.json get.json; do echo "=== $f"; python3 -c "
-          import json,sys
-          d=json.load(open('$f')); d=d if isinstance(d,list) else [d]
-          d.sort(key=lambda r:r.get('fecha',''))
-          print(len(d),'registros; claves:',list(d[0].keys()))
-          for r in d[-3:]+[x for x in d if x.get('fecha','').startswith('2026-11-17 0')][:1]:
-            print(r.get('fecha'))
-            for x in (r.get('datos') or []): print('   ', json.dumps(x, ensure_ascii=False)[:300])
-          "; done
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node scripts/debug-boya.mjs
