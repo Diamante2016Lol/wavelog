@@ -1,0 +1,10 @@
+name: dbg cors (temporal)
+on: { push: { branches: [dbg-cors] } }
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          U="https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es"
+          echo "== OPTIONS"; curl -s -i -X OPTIONS "$U" -H "Origin: https://diamante2016lol.github.io" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type" | grep -i "^HTTP\|access-control"
+          echo "== POST"; curl -s -i -X POST "$U" -H "Origin: https://diamante2016lol.github.io" -H "Content-Type: application/json" -d '[20,34,32,17,13]' | grep -i "^HTTP\|access-control"
