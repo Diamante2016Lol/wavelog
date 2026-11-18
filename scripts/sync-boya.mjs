@@ -11,11 +11,12 @@ import ws from 'ws';
 const STATION_URL = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
 const TABLE_NAME  = 'boya_barcelona';
 
-// IDs actualizados con la ingeniería inversa (13=Hs, 17=Hmax, 34=Tp, 20=Dir)
-const PARAM_HS   = ['1', '32', '13'];
-const PARAM_HMAX = ['2', '33', '17'];
-const PARAM_TP   = ['4', '34'];
-const PARAM_DIR  = ['6', '36', '20'];
+// Cada dato viene con su nombre ESEOO (Hm0, Hmax, Tp, MeanDir...). Se identifica por
+// ese nombre; el id solo sirve de respaldo. OJO: el id 32 es Tm02 (periodo medio), NO
+// la Hs. Antes estaba en la lista de Hs y, cuando Portus cambió el orden de los datos
+// (17-nov-2026), la Hs pasó a ser el Tm02 (~5 "m").
+const ESEOO = { Hm0: 'hs', Hmax: 'hmax', Tp: 'tp', MeanDir: 'dir' };
+const IDS   = { '13': 'hs', '17': 'hmax', '34': 'tp', '20': 'dir' };
 
 const BROWSER_HEADERS = {
   'Accept':          'application/json, text/plain, */*',
@@ -87,10 +88,14 @@ async function main() {
   const ultima = filas.at(-1);
   console.log(`[sync-boya] ${filas.length} registros válidos · último: ${ultima.fecha_oficial} Hs=${ultima.hs}m`);
 
-  // PASO 3: Guardar los que falten (los que ya existen se ignoran)
+  // PASO 3: Guardar las últimas ~48 h, sobrescribiendo lo que hubiera: Portus es la
+  //   fuente oficial y así cualquier dato mal guardado se corrige solo en la siguiente pasada.
+  const { data: previos } = await supabase.from(TABLE_NAME).select('fecha_oficial')
+    .gte('fecha_oficial', filas[0].fecha_oficial);
+  const yaEstaban = new Set((previos || []).map(r => new Date(r.fecha_oficial).toISOString()));
   const { data: insertados, error: errorInsert } = await supabase
     .from(TABLE_NAME)
-    .upsert(filas, { onConflict: 'fecha_oficial', ignoreDuplicates: true })
+    .upsert(filas, { onConflict: 'fecha_oficial' })
     .select('fecha_oficial');
 
   if (errorInsert) {
@@ -98,9 +103,9 @@ async function main() {
     process.exit(1);
   }
 
-  const nuevos = insertados?.length || 0;
-  console.log(`[sync-boya] ${nuevos} horas nuevas guardadas, ${filas.length - nuevos} ya existían.`
-    + (nuevos ? ` Nuevas: ${insertados.map(r => r.fecha_oficial.slice(5, 16)).join(', ')}` : ''));
+  const nuevas = filas.filter(f => !yaEstaban.has(f.fecha_oficial));
+  console.log(`[sync-boya] ${insertados?.length || 0} horas guardadas (${nuevas.length} nuevas, el resto actualizadas).`
+    + (nuevas.length ? ` Nuevas: ${nuevas.map(r => r.fecha_oficial.slice(5, 16)).join(', ')}` : ''));
 }
 
 // =============================================================================
@@ -174,21 +179,21 @@ function extraerOleaje(registro) {
     ?? (Array.isArray(registro) ? registro : []);
 
   for (const d of datos) {
-    const id = String(d.paramId ?? d.idVariable ?? d.id ?? '').trim();
-    
+    const campo = ESEOO[d.paramEseoo] ?? IDS[String(d.paramId ?? d.idVariable ?? d.id ?? '').trim()];
+    if (!campo || d.averia === true) continue;
+
     const valorBruto = parseValor(d.valor ?? d.value ?? d.v ?? d.dato);
-    // ¡CLAVE! Sacamos el factor. Si no viene en el JSON, usamos 1 para que no se rompa la división.
-    const factor = parseValor(d.factor) || 1;
-
     if (valorBruto === null) continue;
+    // Los valores vienen escalados (p. ej. Hs 138 con factor 100 = 1,38 m)
+    const factor = parseValor(d.factor) || 1;
+    resultado[campo] = valorBruto / factor;
+  }
 
-    // Aplicamos la división descubierta
-    const valorReal = valorBruto / factor;
-
-    if      (PARAM_HS.includes(id))   resultado.hs   = valorReal;
-    else if (PARAM_HMAX.includes(id)) resultado.hmax = valorReal;
-    else if (PARAM_TP.includes(id))   resultado.tp   = valorReal;
-    else if (PARAM_DIR.includes(id))  resultado.dir  = valorReal;
+  // Sanidad: la Hs nunca puede superar la Hmax ni ser absurda para la boya costera
+  if (resultado.hs !== null && (resultado.hs <= 0 || resultado.hs > 10
+      || (resultado.hmax !== null && resultado.hs > resultado.hmax))) {
+    console.warn(`[sync-boya] Hs descartada por incoherente: ${resultado.hs} (Hmax ${resultado.hmax})`);
+    resultado.hs = null;
   }
 
   return resultado;
