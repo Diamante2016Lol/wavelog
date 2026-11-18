@@ -1,0 +1,10 @@
+name: dbg dominio (temporal)
+on: { push: { branches: [dbg-dom] } }
+jobs:
+  d:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for u in wavelog.vercel.app wavelog-dia-s-projects1.vercel.app wavelog-git-main-dia-s-projects1.vercel.app wavelog-diamante2016lol.vercel.app wavelog-dia.vercel.app; do
+            echo "$u -> $(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' https://$u/) | title: $(curl -s https://$u/ | grep -o '<title>[^<]*' | head -1) | api: $(curl -s -o /dev/null -w '%{http_code}' https://$u/api/save-data)"
+          done
