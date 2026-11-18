@@ -250,7 +250,7 @@
     <div class="conditions-bar">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
         <span class="conditions-label">📡 Boya Barcelona (Supabase)</span>
-        <button onclick="fetchPortusData()" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
+        <button onclick="fetchPortusData(true)" style="color:var(--teal); font-size:0.6rem; background:none; border:none; cursor:pointer;">↻ actualizar</button>
       </div>
       <div id="conditions-content">
         <div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Cargando datos...</div>
@@ -457,14 +457,69 @@
     // -------------------------------------------------------------------------
     // BOYA BARCELONA
     // -------------------------------------------------------------------------
-    async function fetchPortusData() {
+    // Portus (Puertos del Estado) permite pedir la boya directamente desde el navegador
+    // (CORS abierto), así que la web lee el dato en directo al cargar y al darle a
+    // "actualizar". El robot de GitHub sigue guardando el histórico en Supabase.
+    //   Misma lectura que lib/boya.mjs: por nombre ESEOO (Hm0/Hmax/Tp/MeanDir), id de
+    //   respaldo; el id 32 es Tm02 (periodo), NO la Hs.
+    const PORTUS_URL = 'https://portus.puertos.es/portussvr/api/RTData/station/1731?locale=es';
+    const PORTUS_ESEOO = { Hm0:'hs', Hmax:'hmax', Tp:'tp', MeanDir:'dir' };
+    const PORTUS_IDS = { '13':'hs', '17':'hmax', '34':'tp', '20':'dir' };
+    let portusCache = { t: 0, filas: null };
+
+    function portusAFila(reg) {
+      const o = { hs:null, hmax:null, tp:null, dir:null };
+      for (const d of reg.datos || []) {
+        const campo = PORTUS_ESEOO[d.paramEseoo] ?? PORTUS_IDS[String(d.id ?? '')];
+        const v = parseFloat(String(d.valor ?? '').replace(',', '.'));
+        if (!campo || d.averia === true || isNaN(v)) continue;
+        o[campo] = v / (parseFloat(d.factor) || 1);
+      }
+      if (o.hs === null || o.hs <= 0 || o.hs > 10 || (o.hmax !== null && o.hs > o.hmax)) return null;
+      const t = new Date(String(reg.fecha || '').trim().replace(' ', 'T').replace(/\.0+$/, '') + 'Z');
+      if (isNaN(t)) return null;
+      const r2 = (n, k) => Math.round(n * 10 ** k) / 10 ** k;
+      return { fecha_oficial: t.toISOString(), hs: r2(o.hs, 2),
+        hmax: o.hmax !== null ? r2(o.hmax, 2) : r2(o.hs * 1.55, 2), tp: o.tp !== null ? r2(o.tp, 1) : null,
+        dir: o.dir !== null ? DIRS[Math.round((((o.dir % 360) + 360) % 360) / 45) % 8] : '--',
+        dir_grados: o.dir !== null ? Math.round(o.dir) : null, fuente: 'portus' };
+    }
+
+    // Últimas ~48 h en directo de Portus (caché de 2 min; forzar = saltarse la caché)
+    async function portusDirecto(forzar = false) {
+      if (!forzar && portusCache.filas && Date.now() - portusCache.t < 120000) return portusCache.filas;
+      const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(`${PORTUS_URL}&_ts=${Date.now()}`, { method:'POST', signal: ctrl.signal,
+          headers: { 'Content-Type':'application/json' }, body: JSON.stringify([20, 34, 32, 17, 13]) });
+        if (!res.ok) throw new Error('Portus ' + res.status);
+        const data = await res.json();
+        const filas = (Array.isArray(data) ? data : [data]).map(portusAFila).filter(Boolean)
+          .sort((a, b) => a.fecha_oficial.localeCompare(b.fecha_oficial));
+        portusCache = { t: Date.now(), filas };
+        return filas;
+      } finally { clearTimeout(to); }
+    }
+
+    // El dato más reciente entre Portus (directo) y Supabase (lo que guardó el robot)
+    async function boyaUltima(forzar = false) {
+      const [p, s] = await Promise.allSettled([
+        portusDirecto(forzar),
+        supabaseClient.from('boya_barcelona').select('*').order('fecha_oficial', { ascending:false }).limit(1),
+      ]);
+      const directo = p.status === 'fulfilled' ? p.value.at(-1) : null;
+      const guardado = s.status === 'fulfilled' ? s.value.data?.[0] : null;
+      if (!directo) return guardado || null;
+      if (!guardado) return directo;
+      return new Date(directo.fecha_oficial) >= new Date(guardado.fecha_oficial) ? directo : guardado;
+    }
+
+    async function fetchPortusData(forzar = false) {
       const contenedor = document.getElementById('conditions-content');
       contenedor.innerHTML = '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="status-dot loading"></span> Conectando...</div>';
       try {
-        const { data, error } = await supabaseClient
-          .from('boya_barcelona').select('*').order('fecha_oficial', { ascending: false }).limit(1);
-        if (error || !data || !data.length) throw new Error('Sin datos');
-        const d = data[0];
+        const d = await boyaUltima(forzar);
+        if (!d) throw new Error('Sin datos');
         const horaStr = d.fecha_oficial
           ? new Date(d.fecha_oficial).toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' })
           : '--:--';
@@ -478,7 +533,7 @@
           <div style="margin-top:7px; display:flex; align-items:center; gap:5px;">
             <span class="status-dot live"></span>
             <span style="font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--muted);">
-              Sincronizado via GitHub · ${horaStr}
+              ${d.fuente === 'portus' ? 'En directo · Puertos del Estado' : 'Sincronizado via GitHub'} · ${horaStr}
             </span>
           </div>`;
       } catch {
@@ -499,14 +554,19 @@
       const btn   = document.getElementById('btn-autofill');
       if (!fecha || !hora) return showToast('Selecciona fecha y hora primero', true);
       btn.disabled = true;
-      btn.textContent = '⏳ Buscando en Supabase...';
+      btn.textContent = '⏳ Buscando datos de la boya...';
       try {
         const targetMs = new Date(`${fecha}T${hora}:00`).getTime();
         const minDate  = new Date(targetMs - 48 * 3600000).toISOString();
         const maxDate  = new Date(targetMs + 48 * 3600000).toISOString();
-        const { data, error } = await supabaseClient.from('boya_barcelona').select('*')
-          .gte('fecha_oficial', minDate).lte('fecha_oficial', maxDate);
-        if (error || !data || !data.length) throw new Error('Sin datos');
+        const [{ data: guardados }, directo] = await Promise.all([
+          supabaseClient.from('boya_barcelona').select('*').gte('fecha_oficial', minDate).lte('fecha_oficial', maxDate),
+          portusDirecto().catch(() => []),   // las últimas ~48 h, aunque el robot aún no las haya guardado
+        ]);
+        const porHora = new Map((guardados || []).map(d => [new Date(d.fecha_oficial).toISOString(), d]));
+        directo.forEach(d => porHora.set(d.fecha_oficial, d));
+        const data = [...porHora.values()].filter(d => d.fecha_oficial >= minDate && d.fecha_oficial <= maxDate);
+        if (!data.length) throw new Error('Sin datos');
         let closest = data[0], minDiff = Math.abs(targetMs - new Date(closest.fecha_oficial).getTime());
         for (const d of data) {
           const diff = Math.abs(targetMs - new Date(d.fecha_oficial).getTime());
@@ -548,11 +608,11 @@
     }
     cargarDatalistSpots();
     async function renderSpots() {
-      const [boyaRes, sesRes] = await Promise.all([
-        supabaseClient.from('boya_barcelona').select('*').order('fecha_oficial', { ascending:false }).limit(1),
+      const [boya, sesRes] = await Promise.all([
+        boyaUltima().catch(() => null),
         supabaseClient.from('sessions').select('*').order('datetime', { ascending:false }),
       ]);
-      spotsState.boya = boyaRes.data?.[0] || null;
+      spotsState.boya = boya;
       spotsState.sesiones = sesRes.data || [];
       const b = spotsState.boya;
       document.getElementById('spots-boya').innerHTML = b

@@ -21,11 +21,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Instalar dependencias
-        run: |
-          echo '{"name":"wavelog","version":"1.0.0","type":"module"}' > package.json
-          npm install @supabase/supabase-js ws
-
       - name: Ejecutar sync de la boya
         run: node scripts/sync-boya.mjs
         env:
